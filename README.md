@@ -65,4 +65,4 @@ lieber: kopieren, dann im Status-Fenster **Merken**.
 
 ## Lizenz
 
-[MIT](LICENSE)
+[PolyForm Noncommercial 1.0.0](LICENSE). Private und nicht-kommerzielle Nutzung ist erlaubt. Für kommerzielle Nutzung bitte melden.
