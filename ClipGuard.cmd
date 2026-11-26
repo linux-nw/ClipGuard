@@ -1,7 +1,7 @@
 @echo off
-rem ClipGuard starten.
-rem   Ohne Parameter:  startet ClipGuard unsichtbar im Tray (Schild-Symbol neben der Uhr).
-rem   Mit Parametern:  reicht sie an clipguard.ps1 weiter, z.B.  ClipGuard.cmd -SelbstTest
+rem Start ClipGuard.
+rem   Without parameters:  starts ClipGuard hidden in the tray (shield icon next to the clock).
+rem   With parameters:  passes them on to clipguard.ps1, e.g.  ClipGuard.cmd -SelbstTest
 chcp 65001 >nul
 
 if "%~1"=="" (

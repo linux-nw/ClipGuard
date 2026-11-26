@@ -1,37 +1,37 @@
 ﻿<#
-  ClipGuard - schwaerzt Secrets in der Zwischenablage, bevor du sie irgendwo einfuegst.
+  ClipGuard - redacts secrets in the clipboard before you paste them anywhere.
 
-  Laeuft im Tray, prueft jeden kopierten Text und ersetzt erkannte Secrets durch [REDACTED].
-  Egal wohin du danach einfuegst (KI-Chat, Forum, Ticket, Teams): das Secret ist schon raus.
+  Runs in the tray, checks every copied text and replaces detected secrets with [REDACTED].
+  No matter where you paste afterwards (AI chat, forum, ticket, Teams): the secret is already gone.
 
-  Erkennung in 5 Schichten:
-   1. Feste Formate      ~180 eigene Regeln (Azure/Entra/SharePoint, GitHub, KI-Anbieter, Homeserver, Hashes ...)
-   2. Stichwort + Wert   password=..., "client_secret": "...", --token ..., <Password>...</Password>, Cookies, Header
-   3. Entropie           lange Zufallsstrings ohne bekanntes Format
-   4. Gemerkte Secrets   jedes erkannte Secret (und alles, was dein Passwortmanager kopiert) wird bis zum Beenden im RAM
-                         gemerkt und danach auch in Variationen geschwaerzt: gross/klein, URL-kodiert, Base64, Hex,
-                         JSON-/XML-/Shell-escaped, umgebrochen, als Bruchstueck (erste/letzte 16 Zeichen)
-   5. gitleaks-Regeln    optional: ueber das Tray-Menue laedst du die ~220 gepflegten gitleaks-Regeln nach
+  Detection in 5 layers:
+   1. Fixed formats      ~180 own rules (Azure/Entra/SharePoint, GitHub, AI providers, home server, hashes ...)
+   2. Keyword + value    password=..., "client_secret": "...", --token ..., <Password>...</Password>, cookies, headers
+   3. Entropy            long random strings without a known format
+   4. Remembered secrets every detected secret (and everything your password manager copies) is remembered in RAM
+                         until exit and then also redacted in variations: upper/lower case, URL-encoded, Base64, Hex,
+                         JSON/XML/shell-escaped, line-wrapped, as a fragment (first/last 16 characters)
+   5. gitleaks rules     optional: load the ~220 maintained gitleaks rules via the tray menu
 
-  So arbeitet es:
-   Alles Erkannte wird sofort ersetzt - mitten im Text genauso wie als einzelner Wert (Strg+V liefert [REDACTED]).
-   Das Original bleibt im Windows-Zwischenablageverlauf: Win+V, dort das Original waehlen, fertig.
-   (Windows legt von jeder Kopie einen Verlaufseintrag an, auch vom Original, bevor ClipGuard es ersetzt.)
-   Was du bewusst aus Win+V zurueckholst, laesst ClipGuard durch. Zusaetzlich liegen die letzten 10 Originale im
-   Tray-Menue unter "Originale (nur im RAM)", falls Win+V aus oder per Richtlinie gesperrt ist.
-   Passwortmanager-Kopien (Bitwarden, KeePass ...) fasst ClipGuard nie an, merkt sie sich aber.
-   Pause: Linksklick aufs Schild = 5 Minuten aus (graues Schild), nochmal klicken = wieder an (gruenes Schild).
+  How it works:
+   Everything detected is replaced immediately - in the middle of text as well as a single value (Ctrl+V gives [REDACTED]).
+   The original stays in the Windows clipboard history: Win+V, pick the original there, done.
+   (Windows creates a history entry for every copy, including the original, before ClipGuard replaces it.)
+   What you deliberately restore from Win+V, ClipGuard lets through. The last 10 originals are also in the
+   tray menu under "Originale (nur im RAM)", in case Win+V is off or blocked by policy.
+   Password manager copies (Bitwarden, KeePass ...) are never touched by ClipGuard, but it remembers them.
+   Pause: left click on the shield = 5 minutes off (grey shield), click again = on again (green shield).
 
-  Grenzen: Bilder/Screenshots und kopierte Dateien werden nicht geprueft. Ein einzelnes Passwort ohne erkennbares
-  Format (z.B. "Sommer2026!") erkennt ClipGuard beim ersten Kopieren nicht - dafuer gibt es im Tray-Menue
-  "Aktuelle Zwischenablage als Secret merken" (oder den Passwortmanager-Weg).
+  Limits: images/screenshots and copied files are not checked. A single password without a recognizable
+  format (e.g. "Sommer2026!") is not detected on first copy - for that there is the tray menu item
+  "Aktuelle Zwischenablage als Secret merken" (or the password manager route).
 
-  Aufruf:
-    Start (Tray):        ClipGuard.cmd (Doppelklick)
-    Selbsttest:          powershell -ExecutionPolicy Bypass -File .\clipguard.ps1 -SelbstTest
-    Datei pruefen:       ... -Pruefe .\datei.txt        (zeigt die geschwaerzte Version)
-    Autostart an/aus:    ... -Autostart An | Aus
-    gitleaks-Regeln:     ... -RegelnAktualisieren
+  Usage:
+    Start (tray):        ClipGuard.cmd (double click)
+    Self-test:           powershell -ExecutionPolicy Bypass -File .\clipguard.ps1 -SelbstTest
+    Check a file:        ... -Pruefe .\datei.txt        (shows the redacted version)
+    Autostart on/off:    ... -Autostart An | Aus
+    gitleaks rules:      ... -RegelnAktualisieren
 #>
 param(
     [switch]$SelbstTest,
@@ -52,15 +52,15 @@ $script:MaxZeichen = 4000000
 try { Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop } catch { }
 
 # =====================================================================================================
-#  REGELN
-#  Format:  Art ::: Name ::: Regex
-#   F = festes Format, Treffer wird immer geschwaerzt
-#   W = Wert wird vorher geprueft (kein Platzhalter, keine Variable, kein Code)
-#   B = wie W, zusaetzlich: reine Buchstabenwoerter gelten nicht als Secret
-#  Gibt es eine Gruppe (?<s>...), wird nur die geschwaerzt, sonst der ganze Treffer.
+#  RULES
+#  Format:  Kind ::: Name ::: Regex
+#   F = fixed format, match is always redacted
+#   W = value is checked first (no placeholder, no variable, no code)
+#   B = like W, plus: pure letter words do not count as a secret
+#  If there is a group (?<s>...), only that group is redacted, otherwise the whole match.
 # =====================================================================================================
 $RegelTabelle = @'
-# ---------- Schluesseldateien ----------
+# ---------- Key files ----------
 F ::: Privater Schluessel (PEM) ::: -----BEGIN[A-Z ]*PRIVATE KEY(?: BLOCK)?-----(?:[\s\S]*?-----END[A-Z ]*PRIVATE KEY(?: BLOCK)?-----|[A-Za-z0-9+/=\s\\]+)
 F ::: PuTTY-Schluessel ::: PuTTY-User-Key-File-\d:[\s\S]*?Private-MAC: ?[0-9a-fA-F]+
 F ::: age-Schluessel ::: AGE-SECRET-KEY-1[A-Z0-9]{58}
@@ -68,7 +68,7 @@ F ::: WireGuard-Schluessel ::: (?i)\b(?:PrivateKey|PresharedKey)\s*=\s*(?<s>[A-Z
 F ::: Kerberos-Ticket ::: \bdoI[A-Za-z0-9+/]{300,}={0,2}
 F ::: DPAPI-Blob (SecureString/RDP) ::: (?i)\b01000000d08c9ddf0115d1118c7a00c04fc297eb[0-9a-f]{64,}
 
-# ---------- Tokens allgemein ----------
+# ---------- Tokens (general) ----------
 F ::: JWT ::: \beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)*
 F ::: JWT (unsigniert/JWE) ::: \beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{0,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_-]+)?
 F ::: Bearer-Token ::: (?i)\bBearer\s+(?<s>(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,})
@@ -106,7 +106,7 @@ W ::: net use ::: (?i)\bnet\s+use\s+\S+\s+\\\\\S+\s+(?<s>[^\s/*]\S*)\s+/user:
 W ::: cmdkey/Schalter ::: (?i)(?<=\s)/(?:pass(?:word)?|p(?:wd)?):(?<q>["']?)(?<s>[^\s"']{3,})\k<q>
 B ::: App-Konfig (key/value) ::: (?i)\b(?:key|name)\s*=\s*"[^"]*(?:password|pwd|secret|token|apikey|api_key|accesskey|connectionstring)[^"]*"\s+value\s*=\s*"(?<s>[^"]{3,})"
 
-# ---------- Code-Hosting / CI ----------
+# ---------- Code hosting / CI ----------
 F ::: GitHub-Token ::: \bgh[pousr]_[A-Za-z0-9]{36,255}\b
 F ::: GitHub-Token (fine-grained) ::: \bgithub_pat_[A-Za-z0-9_]{36,255}\b
 F ::: GitLab-Token ::: \bgl(?:pat|dt|rt|ptt|cbt|ft|soat|imt|agent|oas|ffct)-[A-Za-z0-9_.-]{20,}
@@ -124,7 +124,7 @@ F ::: Buildkite-Token ::: \bbkua_[a-f0-9]{40}\b
 F ::: Docker-Auth (config.json) ::: "auth"\s*:\s*"(?<s>[A-Za-z0-9+/=]{16,})"
 W ::: netrc ::: (?i)\blogin\s+\S+\s+password\s+(?<s>\S+)
 
-# ---------- KI-Anbieter ----------
+# ---------- AI providers ----------
 F ::: sk-Key (OpenAI/Anthropic/OpenRouter/DeepSeek) ::: \bsk-(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}
 F ::: Google-API-Key (Gemini/Maps/Firebase) ::: \bAIza[0-9A-Za-z_-]{35}
 F ::: Google-OAuth-Secret ::: \bGOCSPX-[A-Za-z0-9_-]{28}
@@ -192,7 +192,7 @@ F ::: Vercel-Token ::: \bvc[pkiar]_(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{24,}\b
 F ::: Clerk/Lemon/Paddle-Key ::: \b(?:pdl_(?:live|sdbx)_apikey_[A-Za-z0-9_]{30,}|lmsq_[A-Za-z0-9_]{30,})
 F ::: Expo/EAS-Token (Kontext) ::: (?i)\bEXPO_TOKEN\s*[=:]\s*["']?(?<s>[A-Za-z0-9_-]{20,})
 
-# ---------- Homeserver / privat ----------
+# ---------- Home server / private ----------
 F ::: Tailscale-Key ::: \btskey-[a-z]+-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?
 F ::: Riot-API-Key ::: \bRGAPI-[0-9a-fA-F-]{36}
 F ::: HenrikDev-API-Key ::: \bHDEV-[0-9a-fA-F-]{36}
@@ -215,7 +215,7 @@ F ::: Jina-Key ::: \bjina_[A-Za-z0-9]{40,}
 F ::: Brave-Search-Key ::: \bBSA[A-Za-z0-9_-]{27,}\b
 F ::: Runway-Key ::: \bkey_[a-f0-9]{100,}\b
 
-# ---------- Passwort-Hashes / Dumps ----------
+# ---------- Password hashes / dumps ----------
 F ::: bcrypt-Hash ::: \$2[abxy]\$\d\d\$[./A-Za-z0-9]{53}
 F ::: Argon2-Hash ::: \$argon2(?:id|i|d)\$v=\d+\$[^\s"']+
 F ::: crypt-Hash (shadow/htpasswd) ::: \$(?:1|5|6|y|7|apr1|scrypt|pbkdf2(?:-sha\d+)?)\$[./A-Za-z0-9$=,+-]{20,}
@@ -224,11 +224,11 @@ F ::: NTLM-Hash-Paar ::: \b[a-fA-F0-9]{32}:[a-fA-F0-9]{32}\b
 F ::: NetNTLM-Hash ::: \b[^\s:]{1,40}::[^\s:]{0,40}:[a-fA-F0-9]{16}:[a-fA-F0-9]{32,}:[a-fA-F0-9]{40,}
 F ::: Kerberoast-Hash ::: \$krb5(?:tgs|asrep|pa)\$\d+\$[^\s"']{40,}
 
-# ---------- Krypto-Wallets ----------
+# ---------- Crypto wallets ----------
 F ::: Bitcoin-Privatschluessel (WIF) ::: (?<![A-Za-z0-9])[5KL][1-9A-HJ-NP-Za-km-z]{50,51}(?![A-Za-z0-9])
 F ::: Extended-Private-Key ::: \b[xyzt]prv[1-9A-HJ-NP-Za-km-z]{100,}
 
-# ---------- Herstellerpraefix + Zufallsteil (generisch) ----------
+# ---------- Vendor prefix + random part (generic) ----------
 W ::: Praefix_Hex-Token ::: (?i)\b(?!(?:sha|md|git|commit|hash|checksum|etag|rev|build|image|digest|uuid|guid|id|trace|span|request|req|correlation)[0-9]*[_-])[a-z][a-z0-9]{1,24}(?:[_-][a-z0-9]{1,16}){0,4}[_-](?<s>[0-9a-f]{16,128})(?![0-9a-zA-Z])
 W ::: Praefix_Token ::: (?i)\b(?:[a-z][a-z0-9]{1,24}[_-]){1,5}(?:key|secret|token|pat|sk|pk|ak|apikey|whsec|pw|pass|password|sandbox|live|test|prod|gateway|credential|bearer|auth|admin|master)[_.-](?<s>[A-Za-z0-9~+/=]{16,}(?:[._~-][A-Za-z0-9~+/=_-]{4,})*)
 W ::: Token_nach_Schluesselwort_im_Namen ::: (?i)\b[a-z][a-z0-9]{1,24}(?:[_-][a-z0-9]{1,16}){0,4}[_-](?:key|secret|token|pat|apikey|whsec|credential|password|passwd)[_-](?<s>[A-Za-z0-9~+/=]{16,}(?:[._~-][A-Za-z0-9~+/=_-]{4,})*)
@@ -243,7 +243,7 @@ F ::: Instrumentation-Key ::: (?i)InstrumentationKey\s*=\s*(?<s>[0-9a-f]{8}-[0-9
 W ::: Schluesselwort_Wert (Unterstrich) ::: (?i)(?<![A-Za-z0-9])(?:secret|token|passwort|password|passwd|pass|pw|pwd|apikey|api_key|key|pin|puk|psk|cred)[_-](?<s>(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{6,}(?:[_-][A-Za-z0-9]{4,}){0,3})(?![A-Za-z0-9])
 F ::: Airtable-PAT ::: \bpat[A-Za-z0-9]{10,}\.[0-9a-f]{40,}
 
-# ---------- Azure-Schluessel mit eingebauter Signatur, weitere Formate ----------
+# ---------- Azure keys with built-in signature, further formats ----------
 F ::: Azure-Key (Signatur) ::: (?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{20,}(?:\+ASt|ACDb|\+ASb|\+AEh|\+ARm|AIoT|AzCa|AzSe|AzFu|\+ACR|AZEG|APIM|\+ABa|JQQJ99)[A-Za-z0-9+/_-]{2,}={0,2}
 F ::: Entra-Refresh-Token/Auth-Code ::: (?<![A-Za-z0-9._-])[01]\.A[A-Za-z0-9_-]{60,}(?:\.[A-Za-z0-9_-]{10,})*
 F ::: StaticWebApp-Token ::: \b[0-9a-f]{40,}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{9,}\b
@@ -262,7 +262,7 @@ W ::: Schluessel direkt im Satz ::: (?i)\b(?:passwor[dt]|kennwort|token|secret|a
 B ::: Variable key = "..." ::: (?i)(?<![A-Za-z0-9_.-])\$?(?:key|schl\S{1,2}ssel|api|auth)["']?[ \t]*(?:=|:)[ \t]*["'](?<s>[^"'\s]{12,})["']
 W ::: Bicep-Parameter ::: (?i)\bparam\s+\w*(?:passw|secret|token|key|pwd|cred)\w*\s+string\s*=\s*'(?<s>[^'\r\n]{4,})'
 W ::: Terraform-Variable ::: (?is)\bvariable\s+"[^"]*(?:passw|secret|token|key|pwd|cred)[^"]*"\s*\{[^{}]*?\bdefault\s*=\s*"(?<s>[^"\r\n]{4,})"
-# ---------- Kommandozeile ----------
+# ---------- Command line ----------
 W ::: Login per -p/-pw ::: (?i)\b(?:docker|podman|az|helm|oc|sshpass|plink|pscp|psftp|psexec|winexe|smbclient|mysql|mysqldump|mongosh|redis-cli|xfreerdp|rdesktop|evil-winrm|crackmapexec|nxc|impacket-\w+)\b[^\r\n|;&]*?\s-(?:p|pw|pass|a)\s+(?<q>["']?)(?<s>(?!--?[A-Za-z][A-Za-z-]*(?:\s|$|["']))[^\s"']+)\k<q>
 W ::: curl -u ::: (?i)\b(?:curl(?:\.exe)?|wget|http|https|xh|rclone|git)\b[^\r\n|]*?\s(?:-u|--user|--http-user)[ =]+(?<q>["']?)[^\s:"']+:(?<s>[^\s"']+)\k<q>
 W ::: Passwort im Satz ::: (?i)\b(?:passwor[dt]|kennwort|passcode|passphrase|pw|pin|token|secret|api[- ]?key|schl\S{1,2}ssel)(?:[ \t]+[A-Za-z\u00C0-\u017F@.-]+){0,5}?[ \t]+(?:ist|lautet|is|war|was|w\S{1,2}re)[ \t]*:?[ \t]+(?<q>["'`]?)(?<s>(?=[^\s"'`]*[^\sA-Za-z"'`.,;:!?]|(?-i:[^\s"'`]*[a-z][A-Z][^\s"'`]*[a-z][A-Z]))[^\s"'`]{4,})\k<q>
@@ -270,10 +270,10 @@ W ::: Passwort im Satz ::: (?i)\b(?:passwor[dt]|kennwort|passcode|passphrase|pw|
 
 $script:KeyWort = 'pass|pwd|pw|kennwort|secret|token|api[_-]?key|access[_-]?key|account[_-]?key|private[_-]?key|shared[_-]?access|subscription[_-]?key|master[_-]?key|function[_-]?key|app[_-]?key|encryption[_-]?key|signing[_-]?key|license[_-]?key|storage[_-]?key|client[_-]?key|consumer[_-]?key|auth[_-]?key|instrumentation[_-]?key|key[_-]?data|keymaterial|credential|cred|connection[_-]?string|connstr|sas|bearer|cookie|session[_-]?(?:id|key)|pin|otp|mnemonic|recovery|seed[_-]?phrase|webhook|dsn'
 
-# Stichwort + Wert:  password=abc   "client_secret": "abc"   $token = 'abc'   DB_PASS: abc
+# Keyword + value:  password=abc   "client_secret": "abc"   $token = 'abc'   DB_PASS: abc
 $script:RxKv = New-Object regex (('(?i)(?<![A-Za-z0-9_.-])(?<k>[A-Za-z0-9_.-]{0,40}?(?:KW)[A-Za-z0-9_.-]{0,24}?)["''`]?(?<pre>[ \t]*)(?<op>=>|:=|[:=])(?![=>])(?<post>[ \t]*)(?:(?<q>["''`])(?<s>[^"''`\r\n]{3,8000})\k<q>|(?<s>[^\s"''`]{4,8000}))').Replace('KW', $script:KeyWort)), ([System.Text.RegularExpressions.RegexOptions]::None), ([timespan]::FromMilliseconds(1500))
 $script:RxWertEnde = New-Object regex '[;,&](?=[\w.\- \[\]]{1,40}=)|[;,&]$|</?[A-Za-z!?][^<>\s]*>|>(?=\s|$)'
-# Schalter + Wert:   --client-secret abc   -Password "abc"   --token=abc
+# Flag + value:      --client-secret abc   -Password "abc"   --token=abc
 $script:RxFlag = New-Object regex (('(?i)(?<![A-Za-z0-9])(?<k>--?[A-Za-z0-9-]*(?:KW)[A-Za-z0-9-]*)(?:[ \t]+|[=:])(?:(?<q>["''])(?<s>[^"''\r\n]{3,500})\k<q>|(?<s>[^\s"''|;<>-][^\s"''|;<>]{2,500}))').Replace('KW', $script:KeyWort)), ([System.Text.RegularExpressions.RegexOptions]::None), ([timespan]::FromMilliseconds(1500))
 # XML:               <Password>abc</Password>
 $script:RxXml = New-Object regex (('(?i)<(?<k>[A-Za-z0-9_:.-]*(?:KW)[A-Za-z0-9_:.-]*)(?:\s[^>]*)?>(?<s>[^<\r\n]{3,500})</\k<k>>').Replace('KW', $script:KeyWort)), ([System.Text.RegularExpressions.RegexOptions]::None), ([timespan]::FromMilliseconds(1500))
@@ -303,12 +303,12 @@ $script:Originale = New-Object 'System.Collections.Generic.List[object]'
 function Add-Regel([string]$Art, [string]$Name, [string]$Muster) {
     try {
         $rx = New-Object regex $Muster, ([System.Text.RegularExpressions.RegexOptions]::None), ([timespan]::FromMilliseconds(800))
-        # Hat die Regel ein woertliches Erkennungsstueck (ghp_, AKIA, -----BEGIN ...)? Nur solche gelten auch fuer ROT13/rueckwaerts
+        # Does the rule have a literal marker (ghp_, AKIA, -----BEGIN ...)? Only those also apply to ROT13/reversed
         $kern = $Muster -replace '\(\?<?![^)]*\)', ' ' -replace '\\[A-Za-z]', ' ' -replace '\[[^\]]*\]', ' ' -replace '\(\?<?[A-Za-z!=:-]*>?', ' '
         $lit = (($kern -cmatch '[A-Za-z][A-Za-z_-]{3,}') -or ($Muster.Contains('://'))) -and ($Name -notmatch '^(?:Praefix|Schluesselwort|Token_nach|Hex-Key|UUID-Token)')
         [void]$script:Regeln.Add([pscustomobject]@{ Art = $Art; Name = $Name; Rx = $rx; Lit = $lit })
     } catch {
-        Write-Warning "Regel '$Name' ungueltig: $($_.Exception.Message)"
+        Write-Warning "Rule '$Name' invalid: $($_.Exception.Message)"
     }
 }
 
@@ -321,7 +321,7 @@ function Import-RegelTabelle([string]$Tabelle) {
     }
 }
 
-# Eigene Regeln:  literal:Text   oder   regex:Muster   (eine pro Zeile, # = Kommentar)
+# Custom rules:  literal:text   or   regex:pattern   (one per line, # = comment)
 function Import-Eigene {
     if (-not (Test-Path -LiteralPath $script:EigenePfad)) { return }
     $n = 0
@@ -334,7 +334,7 @@ function Import-Eigene {
     }
 }
 
-# gitleaks.toml einlesen (nur id, regex, entropy, keywords, secretGroup)
+# Read gitleaks.toml (only id, regex, entropy, keywords, secretGroup)
 function Import-Gitleaks([string]$Pfad) {
     $script:GlRegeln.Clear()
     if (-not (Test-Path -LiteralPath $Pfad)) { return 0 }
@@ -347,9 +347,9 @@ function Import-Gitleaks([string]$Pfad) {
         $mRx = [regex]::Match($b, "(?m)^regex\s*=\s*'''(.+?)'''\s*$")
         if (-not $mId.Success -or -not $mRx.Success) { continue }
         $id = $mId.Groups[1].Value
-        if ($id -eq 'generic-api-key') { continue }          # dafuer gibt es die eigene Stichwort-Erkennung
+        if ($id -eq 'generic-api-key') { continue }          # covered by the own keyword detection
         $p = $mRx.Groups[1].Value
-        if ($p.Contains('[[:')) { $skip++; continue }        # POSIX-Klassen kann .NET nicht
+        if ($p.Contains('[[:')) { $skip++; continue }        # .NET does not support POSIX classes
         $p = $p.Replace('(?P<', '(?<')
         $ent = 0.0
         $mE = [regex]::Match($b, '(?m)^entropy\s*=\s*([\d.]+)')
@@ -377,21 +377,21 @@ function Get-Entropie([string]$s) {
     return $e
 }
 
-# Sieht ein Token nach Zufall aus?  Gemischt (aB3...) ab 20 Zeichen, einfarbig (ab3... / AB3...) ab 30 Zeichen.
-# ---------- Zufalls-Erkennung ----------
+# Does a token look random?  Mixed case (aB3...) from 20 characters, single case (ab3... / AB3...) from 30 characters.
+# ---------- Randomness detection ----------
 $script:Bigramme = New-Object 'System.Collections.Generic.HashSet[string]'
 foreach ($b in 'ab ac ad al am an ap ar as at bl ca ce ch ck co ct da de di ea ec ed eg el em en er es et ex fi fo ge gr ha he ic id ie ig il im in io is it ke la le li ll lo lt ma me mi mp na nc nd ne ng ni no ns nt od ol om on op or ot ou pa pe pl po pr pt ra re ri ro rr rs rt se si so ss st ta te th ti to tr ts ty ul um un ur ut va ve wi yp'.Split(' ')) { [void]$script:Bigramme.Add($b) }
 
 function Test-Zufall([string]$v) {
     $t = $v.TrimEnd('=')
-    if ($t -match '^[0-9a-fA-F-]+$') { return $false }          # Hashes, GUIDs, Commit-IDs: eigene Stufe
-    # Alphabet-/Zeichensatz-Folgen (abcdef..., bcdeEfFgG...) sind kein Zufall
+    if ($t -match '^[0-9a-fA-F-]+$') { return $false }          # hashes, GUIDs, commit IDs: handled by their own stage
+    # Alphabet/charset sequences (abcdef..., bcdeEfFgG...) are not random
     $kleinT = $t.ToLowerInvariant(); $sortiert = 0
     for ($i = 1; $i -lt $kleinT.Length; $i++) { if ($kleinT[$i - 1] -le $kleinT[$i]) { $sortiert++ } }
     if ($t.Length -ge 8 -and ($sortiert / ($t.Length - 1)) -ge 0.85) { return $false }
     $stuecke = @($t -split '[_-]')
     $teile = @($stuecke | Where-Object { $_ -cmatch '^(?:\d{4,}|[a-z]{4,}|[A-Z]{4,}|[A-Z][a-z]{3,})$' })
-    if ($teile.Count -ge 2) { return $false }                   # Dateinamen, Bezeichner mit Woertern/Datumsbloecken
+    if ($teile.Count -ge 2) { return $false }                   # file names, identifiers made of words/date blocks
     $z  = ([regex]::Matches($t, '\d')).Count
     $kl = $t -cmatch '[a-z]'
     $gr = $t -cmatch '[A-Z]'
@@ -399,13 +399,13 @@ function Test-Zufall([string]$v) {
     if ($kl -and $gr) {
         if ($t.Length -ge 24) { if ($z -ge 2 -and $e -ge 4.0) { return $true } }
         elseif ($z -ge 3 -and $e -ge 3.9) { return $true }
-        # Ohne (genug) Ziffern: echte Bezeichner bestehen aus Woertern, Zufall nicht
+        # Without (enough) digits: real identifiers consist of words, random strings do not
         if ($t.Length -lt 20 -or $e -lt 3.5) { return $false }
         foreach ($s in $stuecke) { if ($s.Length -ge 8 -and $s -cmatch '^[a-z]*(?:[A-Z][a-z]{2,}){2,}$') { return $false } }
         $an = ([regex]::Matches($t, '[A-Za-z0-9]')).Count
         $lang = 0
         foreach ($m in [regex]::Matches($t, '[a-z]{3,}')) { $lang += $m.Length }
-        $w = $lang / [math]::Max(1, $an)                        # Anteil der Zeichen in Kleinbuchstaben-Folgen (Woerter)
+        $w = $lang / [math]::Max(1, $an)                        # share of characters in lowercase runs (words)
         if ($w -lt 0.45) { return $true }
         if ($w -ge 0.65) { return $false }
         $paare = [regex]::Matches($t, '(?=([A-Za-z]{2}))')
@@ -426,7 +426,7 @@ function Test-Bereich($Liste, [int]$Index) {
     return $false
 }
 
-# ---------- Dekodieren ("Mathe"): Base64, Hex, Base32, Base85, gzip/zlib/zip, Escapes ----------
+# ---------- Decoding ("math"): Base64, Hex, Base32, Base85, gzip/zlib/zip, escapes ----------
 $script:Unlesbar = [string][char]0xFFFF + 'UNLESBAR'
 $script:RxB64Kand   = New-Object regex '(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{16,60000}={0,2}(?![A-Za-z0-9+/_=-])'
 $script:RxB64Block  = New-Object regex '(?:[A-Za-z0-9+/]{40,100}\r?\n){1,}[A-Za-z0-9+/]*={0,2}'
@@ -476,7 +476,7 @@ function Expand-Daten([byte[]]$b, [string]$Art) {
     } finally { $ein.Dispose(); $aus.Dispose() }
 }
 
-# Bytes -> lesbarer Text, $null (kein Text) oder $script:Unlesbar (komprimiert/verschluesselt und nicht pruefbar)
+# Bytes -> readable text, $null (not text) or $script:Unlesbar (compressed/encrypted and not checkable)
 function ConvertFrom-Bytes([byte[]]$b, [bool]$DeflateVersuch = $false, [int]$Stufe = 0) {
     if ($null -eq $b -or $b.Length -lt 4) { return $null }
     $art = $null
@@ -492,7 +492,7 @@ function ConvertFrom-Bytes([byte[]]$b, [bool]$DeflateVersuch = $false, [int]$Stu
             return $t
         }
     }
-    # andere Packer / Container, die sich hier nicht auspacken lassen
+    # other packers / containers that cannot be unpacked here
     if (($b[0] -eq 0x42 -and $b[1] -eq 0x5a -and $b[2] -eq 0x68) -or
         ($b[0] -eq 0xfd -and $b[1] -eq 0x37 -and $b[2] -eq 0x7a -and $b[3] -eq 0x58) -or
         ($b[0] -eq 0x37 -and $b[1] -eq 0x7a -and $b[2] -eq 0xbc -and $b[3] -eq 0xaf) -or
@@ -585,7 +585,7 @@ function ConvertFrom-UU([string]$Block) {
     return , $ms.ToArray()
 }
 
-# Dekodierten Inhalt pruefen; steckt ein Secret drin, wird der ganze kodierte Block geschwaerzt
+# Check decoded content; if it contains a secret, the whole encoded block is redacted
 function Add-Kodiert($sp, [int]$Index, [int]$Laenge, [byte[]]$Bytes, [string]$Art, [int]$Tiefe, [bool]$DeflateVersuch = $false) {
     $klar = ConvertFrom-Bytes $Bytes $DeflateVersuch
     if ($null -eq $klar) { return }
@@ -595,7 +595,7 @@ function Add-Kodiert($sp, [int]$Index, [int]$Laenge, [byte[]]$Bytes, [string]$Ar
 }
 
 function Find-Kodiert($sp, [string]$Text, [int]$Tiefe) {
-    # Base64 (auch URL-sicher, UTF-16, gzip/zlib/zip darin)
+    # Base64 (also URL-safe, UTF-16, gzip/zlib/zip inside)
     foreach ($m in $script:RxB64Kand.Matches($Text)) {
         $v = $m.Value
         if ($v -match '^[0-9a-fA-F]+$' -or $v -cmatch '^[a-z]+$' -or $v -cmatch '^[A-Z_]+$') { continue }
@@ -612,13 +612,13 @@ function Find-Kodiert($sp, [string]$Text, [int]$Tiefe) {
         try { $b = [Convert]::FromBase64String($k) } catch { continue }
         Add-Kodiert $sp $m.Index $m.Length $b 'Base64, umgebrochen' $Tiefe $true
     }
-    # Hex in allen Schreibweisen (ab12..., AB:12:..., 0xab, \xab, %AB, =AB)
+    # Hex in all notations (ab12..., AB:12:..., 0xab, \xab, %AB, =AB)
     foreach ($m in $script:RxHexKand.Matches($Text)) {
         $h = $m.Value -replace '0x', '' -replace '[^0-9a-fA-F]', ''
         if (($h.Length % 2) -ne 0) { continue }
         Add-Kodiert $sp $m.Index $m.Length (ConvertFrom-HexText $h) 'Hex' $Tiefe
     }
-    # Byte-Listen dezimal und binaer
+    # Byte lists, decimal and binary
     foreach ($m in $script:RxDezKand.Matches($Text)) {
         $z = @($m.Value -split '\s*,\s*' | ForEach-Object { [int]$_ })
         if (@($z | Where-Object { $_ -gt 255 }).Count -gt 0) { continue }
@@ -648,7 +648,7 @@ function Find-Kodiert($sp, [string]$Text, [int]$Tiefe) {
         $b = ConvertFrom-UU $m.Groups[1].Value
         if ($b) { Add-Kodiert $sp $m.Index $m.Length $b 'uuencode' $Tiefe }
     }
-    # Escapes mitten im Text (%41, A, \x41, &#65;): Text entschluesselt nochmal pruefen, Fundstellen zurueckrechnen
+    # Escapes in the middle of text (%41, A, \x41, &#65;): check the unescaped text again, map findings back
     $esc = $script:RxEscape.Matches($Text)
     if ($esc.Count -ge 1 -and $esc.Count -le 5000) {
         $sb = New-Object System.Text.StringBuilder
@@ -680,13 +680,13 @@ function Find-Kodiert($sp, [string]$Text, [int]$Tiefe) {
             }
             if (-not $drin) { continue }
             $qs = $x.S + $a; $qe = $x.S + $x.L + $b
-            # haengt der Treffer an einer Kette von Escapes (komplett kodierter Text), die ganze Kette schwaerzen
+            # if the match is attached to a chain of escapes (fully encoded text), redact the whole chain
             $mv = $script:RxEscLaufVor.Match($Text.Substring(0, $qs));  if ($mv.Success) { $qs = $mv.Index }
             $mn = $script:RxEscLaufNach.Match($Text, $qe);              if ($mn.Success -and $mn.Index -eq $qe) { $qe += $mn.Length }
             Add-Span $sp $qs ($qe - $qs) ("Escaped: " + $x.N)
         }
     }
-    # ROT13 und rueckwaerts geschriebener Text (nur feste Formate und Stichwort+Wert)
+    # ROT13 and reversed text (fixed formats and keyword+value only)
     if ($Tiefe -eq 0 -and $Text.Length -le 20000) {
         $ch = $Text.ToCharArray()
         for ($i = 0; $i -lt $ch.Length; $i++) {
@@ -710,7 +710,7 @@ function Test-Luhn([string]$z) {
     return ($sum % 10 -eq 0)
 }
 
-# Ist der Schluesselname wirklich ein Secret-Feld?  (clientSecret ja, compass / max_tokens / token_url nein)
+# Is the key name really a secret field?  (clientSecret yes, compass / max_tokens / token_url no)
 function Test-Schluessel([string]$k) {
     $k = $k.Trim('-', '_', '.', ' ', ':')
     if (-not $k) { return $false }
@@ -722,21 +722,21 @@ function Test-Schluessel([string]$k) {
     return $script:RxKeyJa.IsMatch($n)
 }
 
-# Sieht der Wert nach echtem Secret aus?  (kein Platzhalter, keine Variable, kein Code)
+# Does the value look like a real secret?  (no placeholder, no variable, no code)
 function Test-Wert([string]$v, [bool]$BuchstabenOk) {
     if (-not $v) { return $false }
     $v = $v.Trim()
     if ($v.Length -lt 3) { return $false }
-    # Variablen, Platzhalter, Code - aber keine Passwoerter, die bloss mit einem Sonderzeichen beginnen
+    # Variables, placeholders, code - but not passwords that merely start with a special character
     if ($v -match '^\$\{?[A-Za-z_][\w:.]*\}?$|^\$\(|^%[A-Za-z_]\w*%$|^\{.*\}$|^<.*>$|^\[.*\]$|^\(.*\)$|^=>|^==|^[\[<{(][A-Za-z\u00C0-\u017F _-]*[\]>})]?$|^\*+$|^#+$|^![A-Za-z]+(?:\s|$)|^@[A-Za-z_][\w.]*$') { return $false }
     if ($v -match '^[A-Za-z_][A-Za-z_.]{2,}\(|\$\{|\$\(|\{\{|\}\}|^\w+\[[^\]]*\]$|^(?:[A-Za-z_][\w.]*)?(?:\(\)|\[\]|\{\})[;,]?$') { return $false }
     if ($v.IndexOfAny([char[]]'(){}') -ge 0 -and (($v -replace '[(){}\[\];:,.<>]', '') -match '^[A-Za-z_\u00C0-\u017F]*$')) { return $false }
-    if ($v -cmatch '^(?:[A-Z][a-z]+-[A-Z][A-Za-z]+|\[[\w.]+\]::\w+)$') { return $false }    # Cmdlet / .NET-Aufruf
+    if ($v -cmatch '^(?:[A-Z][a-z]+-[A-Z][A-Za-z]+|\[[\w.]+\]::\w+)$') { return $false }    # cmdlet / .NET call
     if ($script:WertNein.Contains($v.ToLower().TrimEnd('.', ',', ';', ':', '!', '?'))) { return $false }
     if ($script:RxPlatzhalter.IsMatch($v)) { return $false }
     if ($v -match '^\d+\*\w+$') { return $false }
     if ($script:RxCode.IsMatch($v)) {
-        # obj.eigenschaft ist Code - ausser die Teile sind erkennbar Zufall (kaum Kleinbuchstaben-Woerter)
+        # obj.property is code - unless the parts are clearly random (hardly any lowercase words)
         $lw = 0; foreach ($mm in [regex]::Matches($v, '[a-z]{3,}')) { $lw += $mm.Length }
         if (-not ($v.Length -ge 12 -and $v -cmatch '[a-z]' -and $v -cmatch '[A-Z].*[A-Z].*[A-Z]' -and ($lw / $v.Length) -lt 0.3 -and $v -notmatch '::|^(?:os|process|env|secrets|vars|config|settings|self|this|args|params|request|req|response|res|data|options|opts)\b')) { return $false }
     }
@@ -749,7 +749,7 @@ function Get-WertLaenge([string]$v) {
     $m = $script:RxWertEnde.Match($v)
     if ($m.Success -and $m.Index -ge 1) { $n = $m.Index }
     $w = $v.Substring(0, $n)
-    while ($w.Length -gt 1 -and ')]}'.IndexOf($w[$w.Length - 1]) -ge 0) {      # schliessende Klammer ohne oeffnende gehoert zum Code drumherum
+    while ($w.Length -gt 1 -and ')]}'.IndexOf($w[$w.Length - 1]) -ge 0) {      # a closing bracket without an opening one belongs to the surrounding code
         $auf = '([{'[')]}'.IndexOf($w[$w.Length - 1])]
         if ($w.IndexOf($auf) -ge 0) { break }
         $w = $w.Substring(0, $w.Length - 1)
@@ -764,7 +764,7 @@ function Add-Span($Liste, [int]$Start, [int]$Laenge, [string]$Name) {
 function Find-Secrets([string]$Text, [int]$Tiefe = 0, [bool]$NurFest = $false) {
     $sp = New-Object System.Collections.ArrayList
 
-    # 1) eigene Regeltabelle
+    # 1) own rule table
     foreach ($r in $script:Regeln) {
         if ($NurFest -and -not $r.Lit) { continue }
         try {
@@ -778,7 +778,7 @@ function Find-Secrets([string]$Text, [int]$Tiefe = 0, [bool]$NurFest = $false) {
         } catch [System.Text.RegularExpressions.RegexMatchTimeoutException] { }
     }
 
-    # 2) Stichwort + Wert
+    # 2) keyword + value
     try {
         foreach ($m in $script:RxKv.Matches($Text)) {
             if (-not (Test-Schluessel $m.Groups['k'].Value)) { continue }
@@ -787,7 +787,7 @@ function Find-Secrets([string]$Text, [int]$Tiefe = 0, [bool]$NurFest = $false) {
             $eng = ($m.Groups['op'].Value -eq '=' -and $m.Groups['pre'].Length -eq 0 -and $m.Groups['post'].Length -eq 0)
             $ws = $g.Index; $wl = $g.Length; $wert = $g.Value
             if (-not $quoted) {
-                # Wert endet am Trenner zum naechsten Feld (;key= &key= ,key=), nicht an jedem Sonderzeichen: Passwoerter enthalten & ; ,
+                # Value ends at the separator to the next field (;key= &key= ,key=), not at every special character: passwords contain & ; ,
                 $wl = Get-WertLaenge $wert
                 if ($wl -lt 3) { continue }
                 $wert = $wert.Substring(0, $wl)
@@ -812,24 +812,24 @@ function Find-Secrets([string]$Text, [int]$Tiefe = 0, [bool]$NurFest = $false) {
     } catch [System.Text.RegularExpressions.RegexMatchTimeoutException] { }
 
     if (-not $NurFest) {
-    # 3) Kreditkarten (mit Luhn-Pruefung)
+    # 3) Credit cards (with Luhn check)
     foreach ($m in $script:RxKarte.Matches($Text)) {
         $z = $m.Value -replace '[ -]', ''
         if ($script:RxKartenTyp.IsMatch($z) -and (Test-Luhn $z)) { Add-Span $sp $m.Index $m.Length 'Kreditkarte' }
     }
 
-    # 4) Entropie: lange Zufallsstrings ohne bekanntes Format (nicht in URLs, nicht in oeffentlichen Zertifikaten/SSH-Public-Keys)
+    # 4) Entropy: long random strings without a known format (not in URLs, not in public certificates/SSH public keys)
     $urls = @($script:RxUrl.Matches($Text))
     $oeff = @($script:RxOeffentlich.Matches($Text))
     foreach ($m in $script:RxEntropie.Matches($Text)) {
         $v = $m.Value
         if ($v -match '^sha\d{1,3}-') { continue }
-        $form = ($v -cmatch '^(?:[A-Za-z0-9+/]{43}=|[A-Za-z0-9+/]{86}==)$')      # 32- bzw. 64-Byte-Schluessel (Azure Storage, Service Bus, WireGuard ...)
+        $form = ($v -cmatch '^(?:[A-Za-z0-9+/]{43}=|[A-Za-z0-9+/]{86}==)$')      # 32- or 64-byte keys (Azure Storage, Service Bus, WireGuard ...)
         if (-not $form) {
             if ($v.IndexOf('/') -ge 0) {
                 $seg  = @($v.TrimEnd('=') -split '/' | Where-Object { $_.Length -ge 3 })
                 $wort = @($seg | Where-Object { $_ -cmatch '^(?:[A-Za-z][a-z]+(?:[A-Z][a-z]+)*|[a-z0-9_+-]+|[A-Z0-9_+-]+)$' })
-                if ($seg.Count -eq 0 -or ($wort.Count * 2) -ge $seg.Count) { continue }     # Pfade
+                if ($seg.Count -eq 0 -or ($wort.Count * 2) -ge $seg.Count) { continue }     # paths
                 if (-not (Test-Zufall ($v -replace '[/+]', ''))) { continue }
             } elseif (-not (Test-Zufall $v)) { continue }
         }
@@ -839,11 +839,11 @@ function Find-Secrets([string]$Text, [int]$Tiefe = 0, [bool]$NurFest = $false) {
         if ($davor -match '(?i)sha\d{1,3}[-:=]\s*$|integrity\W*$|base64,$|\\$') { continue }
         $ende = $m.Index + $m.Length
         $nach = $Text.Substring($ende, [math]::Min(8, $Text.Length - $ende))
-        if ($nach -cmatch '^\.[a-z0-9]{2,5}(?![A-Za-z0-9_.-])') { continue }                # Dateiname mit Endung
+        if ($nach -cmatch '^\.[a-z0-9]{2,5}(?![A-Za-z0-9_.-])') { continue }                # file name with extension
         Add-Span $sp $m.Index $m.Length 'Zufallsstring'
     }
 
-    # 4b) Hex-Schluessel ab 32 Zeichen ohne Hash-/ID-Kontext (API-Keys vieler Dienste sind reines Hex)
+    # 4b) Hex keys of 32+ characters without hash/ID context (API keys of many services are plain hex)
     foreach ($m in $script:RxHexNackt.Matches($Text)) {
         $v = $m.Value
         if (($v -cmatch '[a-f]' -and $v -cmatch '[A-F]') -or $v -match '^\d+$') { continue }
@@ -853,20 +853,20 @@ function Find-Secrets([string]$Text, [int]$Tiefe = 0, [bool]$NurFest = $false) {
         if ($script:RxHashKontext.IsMatch($davor) -or $davor -match '(?i)sha-?\d|md5|hash|checksum|digest|pr\S{1,2}fsumme') { continue }
         $ende = $m.Index + $m.Length
         $nach = $Text.Substring($ende, [math]::Min(60, $Text.Length - $ende))
-        if ($nach -match '^[ \t]+\*?[\w.\\/:-]+\.\w{1,5}(?:\s|$)') { continue }             # Ausgabe von md5sum/sha256sum: Hash + Dateiname
+        if ($nach -match '^[ \t]+\*?[\w.\\/:-]+\.\w{1,5}(?:\s|$)') { continue }             # output of md5sum/sha256sum: hash + file name
         Add-Span $sp $m.Index $m.Length 'Hex-Schluessel'
     }
 
-    # 4c) Zufallsstrings mit Sonderzeichen (alte Entra-Client-Secrets, generierte Passwoerter)
+    # 4c) Random strings with special characters (old Entra client secrets, generated passwords)
     foreach ($m in $script:RxSymbol.Matches($Text)) {
         $v = $m.Value
         if ($v -cnotmatch '[a-z]' -or $v -cnotmatch '[A-Z]') { continue }
         $sym = ([regex]::Matches($v, '[^A-Za-z0-9]')).Count
         $zif = ([regex]::Matches($v, '\d')).Count
         if ($sym -lt 1 -or ($zif -lt 2 -and $sym -lt 2) -or ($zif -lt 1 -and $sym -lt 4)) { continue }
-        if ($v -cmatch '\.[a-z]{2,4}$') { continue }                                        # Dateiname
+        if ($v -cmatch '\.[a-z]{2,4}$') { continue }                                        # file name
         if ($v -match '://|=>|->|::|//|@[\w-]+\.[a-z]{2,}$|^\w+=\w+$') { continue }
-        $wort = $false                                                                      # enthaelt Woerter?
+        $wort = $false                                                                      # contains words?
         foreach ($l in [regex]::Matches($v, '[A-Z]?[a-z]{5,}|[A-Z]{6,}')) {
             $pp = [regex]::Matches($l.Value, '(?=([A-Za-z]{2}))'); $g = 0
             foreach ($q in $pp) { if ($script:Bigramme.Contains($q.Groups[1].Value.ToLowerInvariant())) { $g++ } }
@@ -879,8 +879,8 @@ function Find-Secrets([string]$Text, [int]$Tiefe = 0, [bool]$NurFest = $false) {
     }
     }
 
-    # 5) gitleaks-Regeln (nur wenn ein Keyword der Regel im Text vorkommt)
-    if (-not $NurFest -and $script:GlRegeln.Count -gt 0 -and $Text.Length -le 300000) {   # bei Riesentexten nur die eigenen Regeln, sonst dauert es zu lange
+    # 5) gitleaks rules (only if a keyword of the rule occurs in the text)
+    if (-not $NurFest -and $script:GlRegeln.Count -gt 0 -and $Text.Length -le 300000) {   # for huge texts only the own rules, otherwise it takes too long
         $klein = $Text.ToLowerInvariant()
         foreach ($r in $script:GlRegeln) {
             $ok = ($r.Kw.Count -eq 0)
@@ -900,7 +900,7 @@ function Find-Secrets([string]$Text, [int]$Tiefe = 0, [bool]$NurFest = $false) {
     }
 
     if (-not $NurFest) {
-    # 6) gemerkte Secrets - auch in Variationen (gross/klein, URL-kodiert, Base64, Hex, escaped, umgebrochen, Bruchstueck)
+    # 6) remembered secrets - also in variations (upper/lower case, URL-encoded, Base64, Hex, escaped, line-wrapped, fragment)
     $varianten = ($Text.Length -le 100000)
     foreach ($g in $script:Gemerkt) {
         $liste = if ($varianten) { $g.V } else { @($g.S) }
@@ -918,7 +918,7 @@ function Find-Secrets([string]$Text, [int]$Tiefe = 0, [bool]$NurFest = $false) {
     }
     }
     if (-not $NurFest) {
-        # 7) Kubernetes-Secret: alle Werte unter data:/stringData:
+        # 7) Kubernetes secret: all values under data:/stringData:
         if ($Text -match '(?m)^\s*kind:\s*Secret\b') {
             foreach ($bl in [regex]::Matches($Text, '(?m)^(?<e>[ \t]*)(?:data|stringData):[ \t]*\r?\n(?<b>(?:\k<e>[ \t]+\S.*(?:\r?\n|$))+)')) {
                 foreach ($m in [regex]::Matches($bl.Groups['b'].Value, '(?m)^[ \t]+[\w.-]+:[ \t]*(?<q>["'']?)(?<s>[^\s"''].*?)\k<q>[ \t]*\r?$')) {
@@ -926,7 +926,7 @@ function Find-Secrets([string]$Text, [int]$Tiefe = 0, [bool]$NurFest = $false) {
                 }
             }
         }
-        # 8) kodierte / gepackte Inhalte
+        # 8) encoded / packed content
         if ($Tiefe -lt 3 -and $Text.Length -le 200000) {
             try { Find-Kodiert $sp $Text $Tiefe } catch [System.Text.RegularExpressions.RegexMatchTimeoutException] { }
         }
@@ -951,7 +951,7 @@ function Merge-Spans($Spans) {
     return ,$out
 }
 
-# Alle Schreibweisen, in denen ein bekanntes Secret spaeter wieder auftauchen kann
+# All notations in which a known secret can reappear later
 function Get-Varianten([string]$s) {
     $v = New-Object 'System.Collections.Generic.List[string]'
     $v.Add($s)
@@ -961,7 +961,7 @@ function Get-Varianten([string]$s) {
         $b64 = [Convert]::ToBase64String($b)
         $v.Add($b64); $v.Add($b64.TrimEnd('=')); $v.Add($b64.Replace('+', '-').Replace('/', '_').TrimEnd('='))
         $v.Add(([BitConverter]::ToString($b)).Replace('-', ''))
-        $v.Add([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($s)))      # UTF-16, z.B. -EncodedCommand
+        $v.Add([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($s)))      # UTF-16, e.g. -EncodedCommand
     } catch { }
     $v.Add($s.Replace('\', '\\').Replace('"', '\"'))                                   # JSON / C-String
     $v.Add($s.Replace('\', '\\').Replace("'", "\'"))
@@ -969,9 +969,9 @@ function Get-Varianten([string]$s) {
     $v.Add($s.Replace('"', '""'))                                                      # CSV / VBS
     $v.Add($s.Replace('`', '``').Replace('$', '`$').Replace('"', '`"'))                # PowerShell "..."
     $v.Add($s.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;').Replace('"', '&quot;'))   # XML / HTML
-    $v.Add($s.Replace('/', '\/'))                                                      # JSON mit escaptem Slash
+    $v.Add($s.Replace('/', '\/'))                                                      # JSON with escaped slash
     $v.Add($s.Replace('%', '%%'))                                                      # Batch
-    if ($s.Length -ge 24) { $v.Add($s.Substring(0, 16)); $v.Add($s.Substring($s.Length - 16)) }   # Bruchstuecke
+    if ($s.Length -ge 24) { $v.Add($s.Substring(0, 16)); $v.Add($s.Substring($s.Length - 16)) }   # fragments
     return @($v | Where-Object { $_.Length -ge 8 } | Select-Object -Unique)
 }
 
@@ -980,7 +980,7 @@ function Add-Gemerkt([string]$s) {
     if ($s.Length -lt 8 -or $s.Length -gt 1024) { return }
     foreach ($g in $script:Gemerkt) { if ($g.S -ceq $s) { return } }
     $rx = $null
-    if ($s.Length -ge 20 -and $s.Length -le 200) {   # auch zerstueckelt (Zeilenumbruch, "abc" + "def", Backslash-Fortsetzung)
+    if ($s.Length -ge 20 -and $s.Length -le 200) {   # also fragmented (line break, "abc" + "def", backslash continuation)
         try {
             $muster = (($s.ToCharArray() | ForEach-Object { [regex]::Escape([string]$_) }) -join '[ \t\r\n"''+\\]{0,3}')
             $rx = New-Object regex -ArgumentList @($muster, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase, [timespan]::FromMilliseconds(300))
@@ -990,15 +990,15 @@ function Add-Gemerkt([string]$s) {
     if ($script:Gemerkt.Count -gt 100) { $script:Gemerkt.RemoveAt(0) }
 }
 
-<#  Kern: Text rein, geschwaerzter Text raus. Alles Erkannte wird ersetzt, auch ein einzeln kopiertes Secret.
-    Rueckgabe: Text, Anzahl, Namen (Regeln), Nackt (= der Text bestand NUR aus dem Secret)  #>
+<#  Core: text in, redacted text out. Everything detected is replaced, including a single copied secret.
+    Returns: Text, Anzahl (count), Namen (rule names), Nackt (= the text consisted ONLY of the secret)  #>
 function Protect-Text([string]$Text) {
     $res = [pscustomobject]@{ Text = $Text; Anzahl = 0; Namen = @(); Nackt = $false; Geaendert = $false }
     if (-not $Text -or $Text.Length -gt $script:MaxZeichen) { return $res }
     $roh = Find-Secrets $Text
     if ($roh.Count -eq 0) { return $res }
     $sp = Merge-Spans $roh
-    # Reste direkt neben einem Treffer (Signatur, Endstueck, Praefix) gehoeren zum selben Token: Treffer ausweiten
+    # Remainders directly next to a match (signature, tail, prefix) belong to the same token: widen the match
     foreach ($x in $sp) {
         if ($x.L -lt 8) { continue }
         while ($x.S -gt 0 -and $Text[$x.S - 1] -match '[A-Za-z0-9_.~-]') {
@@ -1007,7 +1007,7 @@ function Protect-Text([string]$Text) {
         }
         while (($x.S + $x.L) -lt $Text.Length -and ($Text[$x.S + $x.L] -match '[A-Za-z0-9_~+-]' -or ($Text[$x.S + $x.L] -eq '.' -and ($x.S + $x.L + 1) -lt $Text.Length -and $Text[$x.S + $x.L + 1] -match '[A-Za-z0-9_-]'))) { $x.L++ }
     }
-    # Zweiteilige Secrets (id:secret, SAP-Form a!b|c): Rest hinter : ! | $ mitnehmen, wenn er wie ein Token aussieht
+    # Two-part secrets (id:secret, SAP form a!b|c): take the rest after : ! | $ if it looks like a token
     foreach ($x in $sp) {
         if ($x.L -lt 16) { continue }
         for ($k = 0; $k -lt 4; $k++) {
@@ -1026,7 +1026,7 @@ function Protect-Text([string]$Text) {
         $rest = $Text.Remove($sp[0].S, $sp[0].L).Trim().Trim('"', "'", '`').Trim()
         if ($rest.Length -eq 0) { $res.Nackt = $true }
     }
-    # Jedes erkannte Secret merken, damit es spaeter auch in anderer Schreibweise / allein erkannt wird
+    # Remember every detected secret so it is also detected later in a different notation / on its own
     foreach ($x in $sp) { if ($x.L -ge 8 -and $x.L -le 512) { Add-Gemerkt ($Text.Substring($x.S, $x.L)) } }
     if ($res.Nackt) { Add-Gemerkt ($Text.Trim().Trim('"', "'", '`')) }
 
@@ -1060,7 +1060,7 @@ function Update-Gitleaks {
 Initialize-Regeln
 
 # =====================================================================================================
-#  KOMMANDOZEILEN-MODI
+#  COMMAND LINE MODES
 # =====================================================================================================
 if ($RegelnAktualisieren) {
     $n = Update-Gitleaks
@@ -1077,56 +1077,56 @@ if ($Pruefe) {
 }
 
 if ($SelbstTest) {
-    # Alle Test-Secrets sind erfunden und werden zusammengesetzt, damit kein Scanner auf diese Datei anspringt.
+    # All test secrets are made up and assembled from pieces so no scanner triggers on this file.
     $z40 = 'aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0hJ3lM6oR9u'
     $hex = '9f86d081884c7d659a2feaa0c55ad015'
     $soll = @(
-        @('rclone-Leak',        ('Failed to create file system for ":webdav,url=''https://homeserver:8443/remote.php/dav/files/root'',vendor=nextcloud,user=root,pass=' + '52swxwoCk5WokDVtAJXWMxquQ1TpQPlkfwb0brmVOP_NYg' + ':Jellyfin/Filme": read metadata failed'), '52swx'),
-        @('Entra-Secret',       ('az login --service-principal -u 11111111-2222-3333-4444-555555555555 --tenant contoso -p ' + 'abc8Q~' + 'dEfGhIjKlMnOpQrStUvWxYz0123456789a'), '8Q~'),
+        @('rclone leak',        ('Failed to create file system for ":webdav,url=''https://homeserver:8443/remote.php/dav/files/root'',vendor=nextcloud,user=root,pass=' + '52swxwoCk5WokDVtAJXWMxquQ1TpQPlkfwb0brmVOP_NYg' + ':Jellyfin/Filme": read metadata failed'), '52swx'),
+        @('Entra secret',       ('az login --service-principal -u 11111111-2222-3333-4444-555555555555 --tenant contoso -p ' + 'abc8Q~' + 'dEfGhIjKlMnOpQrStUvWxYz0123456789a'), '8Q~'),
         @('Entra in JSON',      ('{ "clientId": "11111111-2222-3333-4444-555555555555", "clientSecret": "' + 'xYz7Q~' + 'AbCdEfGhIjKlMnOpQrStUvWxYz012345_.' + '" }'), '7Q~'),
-        @('Storage-ConnString', ('DefaultEndpointsProtocol=https;AccountName=meinstorage;AccountKey=' + ($z40 + $z40 + 'aB3dE6') + '==;EndpointSuffix=core.windows.net'), 'aB3dE6gH'),
-        @('Flow-Trigger-URL',   ('POST https://prod-12.westeurope.logic.azure.com:443/workflows/abc123/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=' + 'Xk3_' + $z40), 'Xk3_'),
-        @('PnP-Befehl',         ('Connect-PnPOnline -Url https://contoso.sharepoint.com -ClientId abc -ClientSecret "' + 'Sup3r' + 'Geheim!42' + '"'), 'Sup3rGeheim'),
+        @('Storage connection string', ('DefaultEndpointsProtocol=https;AccountName=meinstorage;AccountKey=' + ($z40 + $z40 + 'aB3dE6') + '==;EndpointSuffix=core.windows.net'), 'aB3dE6gH'),
+        @('Flow trigger URL',   ('POST https://prod-12.westeurope.logic.azure.com:443/workflows/abc123/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=' + 'Xk3_' + $z40), 'Xk3_'),
+        @('PnP command',         ('Connect-PnPOnline -Url https://contoso.sharepoint.com -ClientId abc -ClientSecret "' + 'Sup3r' + 'Geheim!42' + '"'), 'Sup3rGeheim'),
         @('SecureString',       ('$sec = ConvertTo-SecureString "' + 'Winter' + '2026!' + '" -AsPlainText -Force'), 'Winter2026'),
         @('JWT',                ('Authorization: Bearer ' + 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9' + '.' + 'eyJhdWQiOiJodHRwczovL2dyYXBoLm1pY3Jvc29mdC5jb20ifQ' + '.' + 'SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'), 'eyJhbGci'),
-        @('SharePoint-Cookie',  ('Cookie: FedAuth=' + '77u/PD94bWwgdmVyc2lvbj0iMS4wIj8+' + '; rtFa=' + $z40), '77u/'),
+        @('SharePoint cookie',  ('Cookie: FedAuth=' + '77u/PD94bWwgdmVyc2lvbj0iMS4wIj8+' + '; rtFa=' + $z40), '77u/'),
         @('GitHub-PAT',         ('git remote set-url origin https://user:' + 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8' + '@github.com/user/projekt.git'), 'ghp_'),
-        @('Gemini-Key',         ('const genAI = new GoogleGenerativeAI("' + 'AIza' + 'SyD3mo-K3y_0123456789abcdefghijklmno' + '");'), 'AIzaSy'),
-        @('OpenAI-Key .env',    ('OPENAI_API_KEY=' + 'sk-proj-' + $z40), 'sk-proj'),
-        @('Anthropic-Key',      ('export ANTHROPIC_API_KEY="' + 'sk-ant-api03-' + $z40 + '"'), 'sk-ant'),
+        @('Gemini key',         ('const genAI = new GoogleGenerativeAI("' + 'AIza' + 'SyD3mo-K3y_0123456789abcdefghijklmno' + '");'), 'AIzaSy'),
+        @('OpenAI key .env',    ('OPENAI_API_KEY=' + 'sk-proj-' + $z40), 'sk-proj'),
+        @('Anthropic key',      ('export ANTHROPIC_API_KEY="' + 'sk-ant-api03-' + $z40 + '"'), 'sk-ant'),
         @('HF-Token',           ('huggingface-cli login --token ' + 'hf_' + 'AbCdEfGhIjKlMnOpQrStUvWxYz01234567'), 'hf_Ab'),
-        @('Nextcloud-App-PW',   ('Benutzer: max  App-Passwort: ' + 'aB3dE-fG6hJ-kL9mN-pQ2rS-tU5vW'), 'aB3dE-'),
-        @('Jellyfin-Key',       ('curl "http://homeserver:8096/Users?api_key=' + $hex + '"'), $hex),
-        @('Emby-Header',        ('X-Emby-Token: ' + $hex), $hex),
+        @('Nextcloud app password',   ('Benutzer: max  App-Passwort: ' + 'aB3dE-fG6hJ-kL9mN-pQ2rS-tU5vW'), 'aB3dE-'),
+        @('Jellyfin key',       ('curl "http://homeserver:8096/Users?api_key=' + $hex + '"'), $hex),
+        @('Emby header',        ('X-Emby-Token: ' + $hex), $hex),
         @('Tailscale',          ('tailscale up --authkey ' + 'tskey-auth-' + 'kAbCdE1CNTRL-' + 'AbCdEfGhIjKlMnOpQrStUvWx'), 'tskey'),
         @('HenrikDev',          ('headers: { Authorization: "' + 'HDEV-' + '12345678-abcd-4321-abcd-1234567890ab' + '" }'), 'HDEV-'),
         @('Private Key',        ("mein key fuer den server:`n-----BEGIN OPENSSH PRIVATE KEY-----`nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz`nc2gtZWQyNTUxOQAAACD`n-----END OPENSSH PRIVATE KEY-----"), 'b3Blbn'),
-        @('Service-Account',    ('"private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n"'), 'MIIEvQ'),
-        @('Gradle-Keystore',    ("storePassword=" + "Kaffee" + "tasse#9`nkeyAlias=upload`nkeyPassword=" + "Kaffee" + "tasse#9"), 'Kaffeetasse#9'),
+        @('Service account',    ('"private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n"'), 'MIIEvQ'),
+        @('Gradle keystore',    ("storePassword=" + "Kaffee" + "tasse#9`nkeyAlias=upload`nkeyPassword=" + "Kaffee" + "tasse#9"), 'Kaffeetasse#9'),
         @('YAML',               ("db:`n  user: admin`n  password: " + "Tr0ub4dor" + "&3`n  port: 5432"), 'Tr0ub4dor'),
-        @('DB-URL',             ('postgres://max:' + 'p4ssw0rt' + '@homeserver:5432/app'), 'p4ssw0rt'),
+        @('DB URL',             ('postgres://max:' + 'p4ssw0rt' + '@homeserver:5432/app'), 'p4ssw0rt'),
         @('curl -u',            ('curl.exe -k -u "max:' + 'geheim' + '123" https://homeserver:8443/'), 'geheim123'),
         @('bcrypt',             ('users: [{ name: max, password: ' + '$2a$10$' + 'N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy' + ' }]'), 'N9qo8u'),
-        @('WLAN netsh',         ("    Sicherheitsschluessel  : Vorhanden`n    Key Content            : " + "Sonnen" + "blume2026"), 'Sonnenblume'),
+        @('Wi-Fi netsh',         ("    Sicherheitsschluessel  : Vorhanden`n    Key Content            : " + "Sonnen" + "blume2026"), 'Sonnenblume'),
         @('XML',                ('<Credentials><Username>svc</Username><Password>' + 'Pa$$' + 'w0rd!' + '</Password></Credentials>'), 'w0rd!'),
-        @('Satz',               ('ey das Passwort ist ' + 'Banane' + '#77 falls du es brauchst'), 'Banane#77'),
-        @('Zufallsstring',      ('hier der key vom Kollegen: ' + 'Zk9' + $z40 + ' bitte testen'), 'Zk9aB3'),
+        @('Sentence',               ('ey das Passwort ist ' + 'Banane' + '#77 falls du es brauchst'), 'Banane#77'),
+        @('Random string',      ('hier der key vom Kollegen: ' + 'Zk9' + $z40 + ' bitte testen'), 'Zk9aB3'),
         @('Stripe',             ('stripe listen --api-key ' + 'sk_' + 'test_' + '4eC39HqLyjWDarjtT1zdp7dc'), '4eC39'),
-        @('Discord-Webhook',    ('WEBHOOK=https://discord.com/api/webhooks/123456789012345678/' + $z40 + $z40), '/aB3dE6'),
-        @('Teams-Webhook',      ('Der Flow postet an https://contoso.webhook.office.com/webhookb2/' + $hex + '@' + $hex + '/IncomingWebhook/' + $hex + '/' + $hex), 'webhookb2'),
-        @('Kreditkarte',        'Karte: 4111 1111 1111 1111 gueltig bis 12/29', '4111 1111'),
-        @('Hex-Key im Satz',    ('Der API-Key vom Jellyfin ist uebrigens ' + $hex + ' falls du ihn brauchst'), $hex),
+        @('Discord webhook',    ('WEBHOOK=https://discord.com/api/webhooks/123456789012345678/' + $z40 + $z40), '/aB3dE6'),
+        @('Teams webhook',      ('Der Flow postet an https://contoso.webhook.office.com/webhookb2/' + $hex + '@' + $hex + '/IncomingWebhook/' + $hex + '/' + $hex), 'webhookb2'),
+        @('Credit card',        'Karte: 4111 1111 1111 1111 gueltig bis 12/29', '4111 1111'),
+        @('Hex key in sentence',    ('Der API-Key vom Jellyfin ist uebrigens ' + $hex + ' falls du ihn brauchst'), $hex),
         @('Sonarr-XML',         ('<Config><Port>8989</Port><ApiKey>' + $hex + '</ApiKey></Config>'), $hex),
-        @('Paperless-Token',    ('curl -H "Authorization: Token ' + $hex + 'a1b2c3d4" http://homeserver:8000/api/documents/'), $hex),
+        @('Paperless token',    ('curl -H "Authorization: Token ' + $hex + 'a1b2c3d4" http://homeserver:8000/api/documents/'), $hex),
         @('Proxmox',            ('Authorization: PVEAPIToken=root@pam!monitoring=' + '12345678-abcd-4321-abcd-1234567890ab'), '12345678-abcd'),
         @('Beszel-UUID',        ('BESZEL_TOKEN: ' + '0a1b2c3d-1111-4222-8333-444455556666'), '0a1b2c3d'),
         @('Compose',            ("    environment:`n      - TZ=Europe/Berlin`n      - AUTHENTIK_SECRET_KEY=" + "qwertzuiop" + "asdfghjkl`n      - PG_PASS=" + "supergeheim"), 'qwertzuiopasdfghjkl'),
-        @('Kleinbuchstaben-Key',('immich key: ' + 'k3j9x7q2m8v4n6b1z5c0p9w8r7t6y5u4i3o2a1s' + ' (read only)'), 'k3j9x7'),
-        @('Kurzer Mix-Key',     ('pin fuer den hub: ' + 'Xk3Lm9Qw2Zr8Tn5Vb7Ya' + ' ok?'), 'Xk3Lm9'),
-        @('Anthropic im Chat',  ('hier mein key ' + 'sk-ant-' + 'api03-' + $z40 + '-' + $z40 + 'AA' + ' warum geht der nicht'), 'sk-ant'),
+        @('Lowercase key',('immich key: ' + 'k3j9x7q2m8v4n6b1z5c0p9w8r7t6y5u4i3o2a1s' + ' (read only)'), 'k3j9x7'),
+        @('Short mixed key',     ('pin fuer den hub: ' + 'Xk3Lm9Qw2Zr8Tn5Vb7Ya' + ' ok?'), 'Xk3Lm9'),
+        @('Anthropic in chat',  ('hier mein key ' + 'sk-ant-' + 'api03-' + $z40 + '-' + $z40 + 'AA' + ' warum geht der nicht'), 'sk-ant'),
         @('NTLM',               ('Administrator:500:aad3b435b51404eeaad3b435b51404ee:' + '31d6cfe0d16ae931b73c59d7e0c089c0' + ':::'), '31d6cfe0')
     )
-    # --- Haertetest-Faelle: kodiert, gepackt, Azure-/Entra-Formate ohne Stichwort, Passwoerter mit Sonderzeichen ---
+    # --- Hard test cases: encoded, packed, Azure/Entra formats without keyword, passwords with special characters ---
     $u8 = [System.Text.Encoding]::UTF8
     $g1 = 'client_secret=' + 'qRs8Q~' + $z40.Substring(0, 34)
     $b64 = [Convert]::ToBase64String($u8.GetBytes($g1))
@@ -1141,112 +1141,112 @@ if ($SelbstTest) {
     $key88 = $z40 + $z40 + 'aB3dE6=='
     $soll += @(
         @('Base64',             ('schau mal: ' + $b64 + ' passt das?'), $b64.Substring(0, 20)),
-        @('Base64 doppelt',     [Convert]::ToBase64String($u8.GetBytes($b64)), [Convert]::ToBase64String($u8.GetBytes($b64)).Substring(0, 20)),
+        @('Base64 twice',     [Convert]::ToBase64String($u8.GetBytes($b64)), [Convert]::ToBase64String($u8.GetBytes($b64)).Substring(0, 20)),
         @('EncodedCommand',     ('powershell -NoProfile -EncodedCommand ' + $b16), $b16.Substring(0, 24)),
         @('Hex',                $hx1, $hx1.Substring(0, 24)),
-        @('Hex mit Doppelpunkt', (($hx1 -replace '(..)', '$1:').TrimEnd(':')), (($hx1 -replace '(..)', '$1:').Substring(0, 24))),
+        @('Hex with colons', (($hx1 -replace '(..)', '$1:').TrimEnd(':')), (($hx1 -replace '(..)', '$1:').Substring(0, 24))),
         @('gzip+Base64',        ('echo ' + $gzb + ' | base64 -d | gunzip'), $gzb.Substring(0, 20)),
-        @('URL-kodiert',        ('https://example.com/login?user=admin&next=' + [uri]::EscapeDataString('password=' + $pwS)), 'Geheim'),
-        @('Unicode-Escapes',    $uni, '\u0053\u006f\u006d'),
+        @('URL-encoded',        ('https://example.com/login?user=admin&next=' + [uri]::EscapeDataString('password=' + $pwS)), 'Geheim'),
+        @('Unicode escapes',    $uni, '\u0053\u006f\u006d'),
         @('ROT13',              ('Zrva Cnffjbeg vfg ' + 'Fbzzre' + '#2026k'), 'Fbzzre'),
-        @('Rueckwaerts',        ('x6202#' + 'remmoS' + '=drowssap'), 'remmoS'),
-        @('Hex-Key im Satz',    ('der key ' + $hex + ' geht nicht mehr'), $hex),
-        @('Storage-Key nackt',  ('Wert aus dem Portal: ' + $key88), $z40),
-        @('Nur Buchstaben',     ('Rz' + 'YUUDQjhygbCMEPkBlRngnfAIvfqZhPuCoA'), 'hygbCMEP'),
-        @('Entra-Secret alt',   ('neues secret: ' + '8pMeLHp]MZhFGZCZ3' + 'fiBT1clq:Rl73MRSL'), 'MZhFGZCZ'),
-        @('Refresh-Token',      ('0.A' + 'RwA' + $z40 + $z40 + $z40), $z40),
-        @('LAPS mit Sonderz.',  ('Password            : ' + 'u3tL;Nuz]I' + '&7s,Xl'), 'Nuz]I'),
+        @('Reversed',        ('x6202#' + 'remmoS' + '=drowssap'), 'remmoS'),
+        @('Hex key in sentence',    ('der key ' + $hex + ' geht nicht mehr'), $hex),
+        @('Bare storage key',  ('Wert aus dem Portal: ' + $key88), $z40),
+        @('Letters only',     ('Rz' + 'YUUDQjhygbCMEPkBlRngnfAIvfqZhPuCoA'), 'hygbCMEP'),
+        @('Old Entra secret',   ('neues secret: ' + '8pMeLHp]MZhFGZCZ3' + 'fiBT1clq:Rl73MRSL'), 'MZhFGZCZ'),
+        @('Refresh token',      ('0.A' + 'RwA' + $z40 + $z40 + $z40), $z40),
+        @('LAPS with special chars',  ('Password            : ' + 'u3tL;Nuz]I' + '&7s,Xl'), 'Nuz]I'),
         @('ODBC Pwd={...}',     ('Driver={ODBC Driver 18 for SQL Server};Server=tcp:srv,1433;Uid=admin;Pwd={' + 'M$O~!nm' + '^4~s};Encrypt=yes;'), 'nm^4'),
-        @('JDBC mit &',         ('jdbc:sqlserver://srv.database.windows.net:1433;database=db;user=admin;password=' + 'YKb&18~QNI' + '!ysX*8;encrypt=true;'), 'QNI!ysX'),
-        @('Passwort mit -',     ('sshpass -p ' + "'-9YFACU7" + "bzVvv8r!' ssh root@homeserver"), 'YFACU7'),
-        @('Kubernetes-Secret',  ("apiVersion: v1`nkind: Secret`nmetadata:`n  name: app`nstringData:`n  wert: " + 'geheim' + 'nis123'), 'geheimnis123'),
-        @('Satz mit Umweg',     ('das root passwort vom server ist ' + 'BBcubW' + 'BAnD'), 'BBcubWBAnD'),
-        @('Bicep-Parameter',    ("@secure()`nparam adminPassword string = '" + 'zYq_Ghu6' + "Bpid*jZ_2'"), 'Ghu6Bpid'),
-        @('Static-Web-App',     ('deployment_token: ' + $hex + $hex + '-0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d6e7'), $hex)
+        @('JDBC with &',         ('jdbc:sqlserver://srv.database.windows.net:1433;database=db;user=admin;password=' + 'YKb&18~QNI' + '!ysX*8;encrypt=true;'), 'QNI!ysX'),
+        @('Password with -',     ('sshpass -p ' + "'-9YFACU7" + "bzVvv8r!' ssh root@homeserver"), 'YFACU7'),
+        @('Kubernetes secret',  ("apiVersion: v1`nkind: Secret`nmetadata:`n  name: app`nstringData:`n  wert: " + 'geheim' + 'nis123'), 'geheimnis123'),
+        @('Sentence with detour',     ('das root passwort vom server ist ' + 'BBcubW' + 'BAnD'), 'BBcubWBAnD'),
+        @('Bicep parameter',    ("@secure()`nparam adminPassword string = '" + 'zYq_Ghu6' + "Bpid*jZ_2'"), 'Ghu6Bpid'),
+        @('Static Web App',     ('deployment_token: ' + $hex + $hex + '-0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d6e7'), $hex)
     )
 
     $nicht = @(
-        @('Prosa',              'Hi Alex, das Passwort: bitte wie besprochen im Tresor nachschauen. Der Token laeuft morgen ab.'),
-        @('Code ohne Secret',   'const token = await getToken(); if (!password) { throw new Error("password required"); } const apiKey = process.env.API_KEY;'),
+        @('Prose',              'Hi Alex, das Passwort: bitte wie besprochen im Tresor nachschauen. Der Token laeuft morgen ab.'),
+        @('Code without secret',   'const token = await getToken(); if (!password) { throw new Error("password required"); } const apiKey = process.env.API_KEY;'),
         @('PowerShell',         '$cred = Get-Credential; Connect-PnPOnline -Url $url -Credentials $cred; $secret = Get-Secret -Name NextcloudApp'),
-        @('Platzhalter',        '$user = "DEIN-NEXTCLOUD-USER"; $pw = rclone obscure "DEIN-APP-PASSWORT"; password=<dein-passwort>'),
+        @('Placeholder',        '$user = "DEIN-NEXTCLOUD-USER"; $pw = rclone obscure "DEIN-APP-PASSWORT"; password=<dein-passwort>'),
         @('Compass/Config',     "COMPASS_PORT=3000`nmax_tokens: 4096`ntoken_endpoint: https://login.microsoftonline.com/common/oauth2/v2.0/token`npassword_min_length=12"),
         @('GUIDs/Hashes',       'TenantId 72f988bf-86f1-41af-91ab-2d7cd011db47, Commit 4b825dc642cb6eb9a060e54bf8d69288fbee4904, SHA256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'),
-        @('SharePoint-Link',    'https://contoso.sharepoint.com/:f:/s/Team/EqAbC1dEfGhIjKlMnOpQrStUvWxYz0123456789abcd?e=Ab1Cd2'),
+        @('SharePoint link',    'https://contoso.sharepoint.com/:f:/s/Team/EqAbC1dEfGhIjKlMnOpQrStUvWxYz0123456789abcd?e=Ab1Cd2'),
         @('package-lock',       '"integrity": "sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg=="'),
         @('git/ssh',            'git clone git@github.com:user/projekt.git && ssh max@homeserver -p 22'),
-        @('Ordnerpfad',         'C:\Users\max\Desktop\Rips\HD\The Hobbit An Unexpected Journey (2012) [tmdbid-49051] [1080p].mkv'),
-        @('Fehlermeldung',      'System.UnauthorizedAccessException: Access token validation failure. Invalid audience. at Microsoft.Graph.HttpProvider'),
-        @('Docker-Image/Tags',  'ghcr.io/immich-app/immich-server:v1.120.1 jellyfin/jellyfin:10.10.3 lscr.io/linuxserver/sonarr:4.0.10.2544-ls257'),
-        @('Token+GUID harmlos', 'Die App-Registrierung (client_id 11111111-2222-3333-4444-555555555555) braucht ein neues Secret, Tenant 72f988bf-86f1-41af-91ab-2d7cd011db47.'),
-        @('Commit mit token',   'commit 4b825dc642cb6eb9a060e54bf8d69288fbee4904 fix: token refresh in auth middleware'),
-        @('Dateinamen',         'backup-2026-11-16-homeserver-nextcloud-data-full-0001.tar.gz und IMG_20261116_184523_processed_final_v2.jpg'),
-        @('Lange Bezeichner',   'handleClipboardSequenceNumberChanged2 microsoft-powershell-secretmanagement-module-v1 x86_64-pc-windows-msvc-toolchain-1.82.0'),
-        @('HTML-Formular',      '<input type="password" name="password" autocomplete="current-password" required>')
+        @('Folder path',         'C:\Users\max\Desktop\Rips\HD\The Hobbit An Unexpected Journey (2012) [tmdbid-49051] [1080p].mkv'),
+        @('Error message',      'System.UnauthorizedAccessException: Access token validation failure. Invalid audience. at Microsoft.Graph.HttpProvider'),
+        @('Docker image/tags',  'ghcr.io/immich-app/immich-server:v1.120.1 jellyfin/jellyfin:10.10.3 lscr.io/linuxserver/sonarr:4.0.10.2544-ls257'),
+        @('Token+GUID harmless', 'Die App-Registrierung (client_id 11111111-2222-3333-4444-555555555555) braucht ein neues Secret, Tenant 72f988bf-86f1-41af-91ab-2d7cd011db47.'),
+        @('Commit with token',   'commit 4b825dc642cb6eb9a060e54bf8d69288fbee4904 fix: token refresh in auth middleware'),
+        @('File names',         'backup-2026-11-16-homeserver-nextcloud-data-full-0001.tar.gz und IMG_20261116_184523_processed_final_v2.jpg'),
+        @('Long identifiers',   'handleClipboardSequenceNumberChanged2 microsoft-powershell-secretmanagement-module-v1 x86_64-pc-windows-msvc-toolchain-1.82.0'),
+        @('HTML form',      '<input type="password" name="password" autocomplete="current-password" required>')
     )
     $ok = 0; $fail = 0
     try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
     Write-Host ""
-    Write-Host "  clipguard selbsttest" -ForegroundColor Magenta
-    Write-Host ("  {0} eigene + {1} gitleaks-Regeln`n" -f $script:Regeln.Count, $script:GlRegeln.Count) -ForegroundColor DarkGray
+    Write-Host "  clipguard selftest" -ForegroundColor Magenta
+    Write-Host ("  {0} own + {1} gitleaks rules`n" -f $script:Regeln.Count, $script:GlRegeln.Count) -ForegroundColor DarkGray
     $nicht += @(
         @('git log',            "commit 3f2a9c1d8e7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f (HEAD -> main)`nAuthor: max`n    fix: Pfad korrigiert"),
         @('md5sum/Get-FileHash', "d41d8cd98f00b204e9800998ecf8427e  datei.iso`nSHA256          E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855       C:\Users\max\Downloads\setup.exe"),
-        @('Dateiname',          'Bitte schick mir die Datei Quartalsbericht_Finanzen_2026_Q3_final_ueberarbeitet_v2.xlsx bis morgen.'),
-        @('SSH-Public-Key',     'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGbL0m9x3Yz1qVf8n2hQk4tR7wPj6sXc5dAe0uBvN1oL max@pc'),
-        @('Zertifikat',         "-----BEGIN CERTIFICATE-----`nMIIDdzCCAl+gAwIBAgIEAgAAuTANBgkqhkiG9w0BAQUFADBaMQswCQYDVQQGEwJJ`nRTESMBAGA1UEChMJQmFsdGltb3JlMRMwEQYDVQQLEwpDeWJlclRydXN0MSIwIAYD`n-----END CERTIFICATE-----"),
-        @('Konstanten',         "TAKEN_FROM_ARGUMENT4U = -4   # num bytes`nMAX_CONCURRENT_UPLOAD_CONNECTIONS_PER_HOST = 12"),
+        @('File name',          'Bitte schick mir die Datei Quartalsbericht_Finanzen_2026_Q3_final_ueberarbeitet_v2.xlsx bis morgen.'),
+        @('SSH public key',     'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGbL0m9x3Yz1qVf8n2hQk4tR7wPj6sXc5dAe0uBvN1oL max@pc'),
+        @('Certificate',         "-----BEGIN CERTIFICATE-----`nMIIDdzCCAl+gAwIBAgIEAgAAuTANBgkqhkiG9w0BAQUFADBaMQswCQYDVQQGEwJJ`nRTESMBAGA1UEChMJQmFsdGltb3JlMRMwEQYDVQQLEwpDeWJlclRydXN0MSIwIAYD`n-----END CERTIFICATE-----"),
+        @('Constants',         "TAKEN_FROM_ARGUMENT4U = -4   # num bytes`nMAX_CONCURRENT_UPLOAD_CONNECTIONS_PER_HOST = 12"),
         @('TypeScript',         'function validatePassword(password: string): boolean { return password.length >= 12; }'),
-        @('Pfade',              'src/components/Dashboard/WidgetContainer/WidgetContainerHeaderActions.tsx und C:\Users\max\AppData\Local\Programs\Microsoft VS Code\resources'),
-        @('Lange Bezeichner',   'getElementsByClassNameAndAttributeValueFromDocumentFragment Microsoft.Graph.Authentication.Commands.ConnectMgGraphCommandExtensionsInternal'),
+        @('Paths',              'src/components/Dashboard/WidgetContainer/WidgetContainerHeaderActions.tsx und C:\Users\max\AppData\Local\Programs\Microsoft VS Code\resources'),
+        @('Long identifiers',   'getElementsByClassNameAndAttributeValueFromDocumentFragment Microsoft.Graph.Authentication.Commands.ConnectMgGraphCommandExtensionsInternal'),
         @('Azure-IDs',          'Tenant-ID: 72f988bf-86f1-41af-91ab-2d7cd011db47 /subscriptions/0b1f6471-1bf0-4dda-aec3-cb9272f09590/resourceGroups/rg-prod'),
-        @('Byte-Liste harmlos', '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] und 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08'),
-        @('Base64 harmlos',     'SGVsbG8gV2VsdA==')
+        @('Byte list harmless', '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] und 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08'),
+        @('Base64 harmless',     'SGVsbG8gV2VsdA==')
     )
     foreach ($t in $soll) {
         $script:Gemerkt.Clear()
         $r = Protect-Text $t[1]
         if ($r.Geaendert -and -not $r.Text.Contains($t[2])) { $ok++; Write-Host ("  +     {0,-20} {1}" -f $t[0], ($r.Namen -join ' | ')) -ForegroundColor Green }
-        else { $fail++; Write-Host ("  FEHLT {0,-20} -> {1}" -f $t[0], $r.Text) -ForegroundColor Red }
+        else { $fail++; Write-Host ("  FAIL  {0,-20} -> {1}" -f $t[0], $r.Text) -ForegroundColor Red }
     }
     Write-Host ""
     foreach ($t in $nicht) {
         $script:Gemerkt.Clear()
         $r = Protect-Text $t[1]
-        if (-not $r.Geaendert) { $ok++; Write-Host ("  +     {0,-20} bleibt unveraendert" -f $t[0]) -ForegroundColor Green }
-        else { $fail++; Write-Host ("  FALSCH {0,-19} [{1}] -> {2}" -f $t[0], ($r.Namen -join ' | '), $r.Text) -ForegroundColor Yellow }
+        if (-not $r.Geaendert) { $ok++; Write-Host ("  +     {0,-20} unchanged" -f $t[0]) -ForegroundColor Green }
+        else { $fail++; Write-Host ("  WRONG {0,-20} [{1}] -> {2}" -f $t[0], ($r.Namen -join ' | '), $r.Text) -ForegroundColor Yellow }
     }
     Write-Host ""
-    # --- Einzeln kopierte Secrets: werden jetzt IMMER geschwaerzt (das Original liegt in Win+V) ---
+    # --- Single copied secrets: are now ALWAYS redacted (the original is in Win+V) ---
     $script:Gemerkt.Clear()
     $einzel = 'Kx7' + $z40
     $r1 = Protect-Text $einzel
     $r2 = Protect-Text "Fehler beim Login mit $einzel am Server"
     $ak = 'sk-ant-' + 'api03-' + $z40 + '_' + $z40 + '-AA'
     $einzelne = @(
-        @('Zufallsstring allein', $einzel),
-        @('Anthropic-Key allein', $ak),
-        @('Entra-Secret allein',  ('abc8Q~' + 'dEfGhIjKlMnOpQrStUvWxYz0123456789a')),
-        @('Nextcloud-PW allein',  'aB3dE-fG6hJ-kL9mN-pQ2rS-tU5vW'),
-        @('GitHub-Token allein',  ('ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8')),
-        @('Gemini-Key allein',    ('AIza' + 'SyD3mo-K3y_0123456789abcdefghijklmno')),
-        @('JWT allein',           ('eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9' + '.' + 'eyJhdWQiOiJodHRwczovL2dyYXBoLm1pY3Jvc29mdC5jb20ifQ' + '.' + 'SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'))
+        @('Random string alone', $einzel),
+        @('Anthropic key alone', $ak),
+        @('Entra secret alone',  ('abc8Q~' + 'dEfGhIjKlMnOpQrStUvWxYz0123456789a')),
+        @('Nextcloud password alone',  'aB3dE-fG6hJ-kL9mN-pQ2rS-tU5vW'),
+        @('GitHub token alone',  ('ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8')),
+        @('Gemini key alone',    ('AIza' + 'SyD3mo-K3y_0123456789abcdefghijklmno')),
+        @('JWT alone',           ('eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9' + '.' + 'eyJhdWQiOiJodHRwczovL2dyYXBoLm1pY3Jvc29mdC5jb20ifQ' + '.' + 'SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'))
     )
     foreach ($t in $einzelne) {
         $script:Gemerkt.Clear()
         $r = Protect-Text $t[1]
         if ($r.Nackt -and $r.Geaendert -and $r.Text -eq '[REDACTED]') { $ok++; Write-Host ("  +     {0,-22} -> [REDACTED]" -f $t[0]) -ForegroundColor Green }
-        else { $fail++; Write-Host ("  FEHLT {0,-22} -> {1}" -f $t[0], $r.Text) -ForegroundColor Red }
+        else { $fail++; Write-Host ("  FAIL  {0,-22} -> {1}" -f $t[0], $r.Text) -ForegroundColor Red }
     }
-    if ($r2.Geaendert -and -not $r2.Text.Contains($einzel)) { $ok++; Write-Host "  +     Secret im Fliesstext geschwaerzt" -ForegroundColor Green }
-    else { $fail++; Write-Host "  FEHLT Secret im Fliesstext: $($r2.Text)" -ForegroundColor Red }
+    if ($r2.Geaendert -and -not $r2.Text.Contains($einzel)) { $ok++; Write-Host "  +     Secret in running text redacted" -ForegroundColor Green }
+    else { $fail++; Write-Host "  FAIL  Secret in running text: $($r2.Text)" -ForegroundColor Red }
 
-    # --- Erkannt = gemerkt: spaeter auch allein und in Variationen ---
+    # --- Detected = remembered: later also on its own and in variations ---
     $script:Gemerkt.Clear()
     $void = Protect-Text ('DB_PASSWORD=' + 'Sommer2026!xyz')
     $x2 = Protect-Text ('mein pw war ' + 'Sommer2026!xyz' + ' heute')
-    if ($x2.Geaendert) { $ok++; Write-Host "  +     Aus Config erkanntes Passwort wird danach auch im Satz erkannt" -ForegroundColor Green }
-    else { $fail++; Write-Host "  FEHLT Gemerktes Passwort im Satz: $($x2.Text)" -ForegroundColor Red }
+    if ($x2.Geaendert) { $ok++; Write-Host "  +     Password detected from config is afterwards also detected in a sentence" -ForegroundColor Green }
+    else { $fail++; Write-Host "  FAIL  Remembered password in sentence: $($x2.Text)" -ForegroundColor Red }
 
     $script:Gemerkt.Clear()
     $geh  = 'Sommer-Gewitter#2026&x'
@@ -1255,29 +1255,29 @@ if ($SelbstTest) {
     Add-Gemerkt $lang
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($geh))
     $var = @(
-        @('im Satz',        "das war $geh oder so",                                                       $geh),
-        @('GROSSBUCHSTABEN', "PW: $($geh.ToUpper()) ok",                                                   $geh.ToUpper()),
-        @('URL-kodiert',    ('https://x.de/login?p=' + [uri]::EscapeDataString($geh) + '&u=max'),        [uri]::EscapeDataString($geh)),
+        @('in sentence',        "das war $geh oder so",                                                       $geh),
+        @('UPPERCASE', "PW: $($geh.ToUpper()) ok",                                                   $geh.ToUpper()),
+        @('URL-encoded',    ('https://x.de/login?p=' + [uri]::EscapeDataString($geh) + '&u=max'),        [uri]::EscapeDataString($geh)),
         @('Base64',         ('ref=' + $b64),                                                              $b64),
         @('JSON-escaped',   ('{"p":"' + $geh.Replace('\', '\\').Replace('"', '\"') + '"}'),               $geh),
         @('Hex',            ('x=' + ([BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes($geh))).Replace('-', '').ToLower()), '736f6d6d6572'),
-        @('umgebrochen',    ($geh.Substring(0, 11) + "`r`n" + $geh.Substring(11)),                        'tter#2026'),
+        @('line-wrapped',    ($geh.Substring(0, 11) + "`r`n" + $geh.Substring(11)),                        'tter#2026'),
         @('PowerShell-String', ('$p = "' + $geh.Replace('"', '`"').Replace('$', '`$') + '"'),             $geh),
-        @('Bruchstueck vorne', ('Fehler bei ' + $lang.Substring(0, 16)),                                  $lang.Substring(0, 16)),
-        @('Bruchstueck hinten', ('...' + $lang.Substring($lang.Length - 16) + ' abgelaufen'),             $lang.Substring($lang.Length - 16))
+        @('Fragment front', ('Fehler bei ' + $lang.Substring(0, 16)),                                  $lang.Substring(0, 16)),
+        @('Fragment back', ('...' + $lang.Substring($lang.Length - 16) + ' abgelaufen'),             $lang.Substring($lang.Length - 16))
     )
     foreach ($t in $var) {
         $r = Protect-Text $t[1]
         if ($r.Geaendert -and -not $r.Text.ToLower().Contains($t[2].ToLower())) { $ok++; Write-Host ("  +     Variation: {0}" -f $t[0]) -ForegroundColor Green }
-        else { $fail++; Write-Host ("  FEHLT Variation: {0} -> {1}" -f $t[0], $r.Text) -ForegroundColor Red }
+        else { $fail++; Write-Host ("  FAIL  Variation: {0} -> {1}" -f $t[0], $r.Text) -ForegroundColor Red }
     }
     $r4 = Protect-Text $r2.Text
-    if (-not $r4.Geaendert) { $ok++; Write-Host "  +     Bereits geschwaerzter Text bleibt stabil" -ForegroundColor Green } else { $fail++; Write-Host "  FEHLT nicht idempotent: $($r4.Text)" -ForegroundColor Red }
+    if (-not $r4.Geaendert) { $ok++; Write-Host "  +     Already redacted text stays stable" -ForegroundColor Green } else { $fail++; Write-Host "  FAIL  not idempotent: $($r4.Text)" -ForegroundColor Red }
     $script:Gemerkt.Clear()
 
     Write-Host ""
-    if ($fail) { Write-Host ("  {0} von {1} fehlgeschlagen" -f $fail, ($ok + $fail)) -ForegroundColor Red }
-    else { Write-Host ("  {0}/{0} " -f $ok) -ForegroundColor Green -NoNewline; Write-Host "bestanden" -ForegroundColor DarkGray }
+    if ($fail) { Write-Host ("  {0} of {1} failed" -f $fail, ($ok + $fail)) -ForegroundColor Red }
+    else { Write-Host ("  {0}/{0} " -f $ok) -ForegroundColor Green -NoNewline; Write-Host "passed" -ForegroundColor DarkGray }
     Write-Host ""
     if ($fail) { exit 1 }
     return
@@ -1303,7 +1303,7 @@ if ($Autostart) {
 }
 
 # =====================================================================================================
-#  TRAY-MODUS (Windows)
+#  TRAY MODE (Windows)
 # =====================================================================================================
 function Start-Tray {
 $script:SkriptPfad = $PSCommandPath
@@ -1381,7 +1381,7 @@ if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
 
 $neu = $false
 $script:Mutex = New-Object System.Threading.Mutex($true, "Local\ClipGuard-Tray", [ref]$neu)
-if (-not $neu) { return }   # läuft schon
+if (-not $neu) { return }   # already running
 
 if (-not (Test-Path -LiteralPath $script:DatenDir)) { [void](New-Item -ItemType Directory -Path $script:DatenDir -Force) }
 $script:LogPfad  = Join-Path $script:DatenDir "protokoll.txt"
@@ -1393,7 +1393,7 @@ $script:RxVerlaufBesitzer = '(?i)^(?:TextInputHost|ShellExperienceHost|StartMenu
 $script:LetzteSeq = [ClipGuard.Native]::GetClipboardSequenceNumber()
 
 function script:Get-Besitzer {
-    # Welcher Prozess hat die Zwischenablage zuletzt befuellt? (hilft, Win+V von einer frischen Kopie zu unterscheiden)
+    # Which process last filled the clipboard? (helps tell Win+V from a fresh copy)
     try {
         $h = [ClipGuard.Native]::GetClipboardOwner()
         if ($h -eq [IntPtr]::Zero) { return "" }
@@ -1405,7 +1405,7 @@ function script:Get-Besitzer {
 }
 
 function script:Test-Verlauf {
-    # Ist der Windows-Zwischenablageverlauf (Win+V) nutzbar?  an / aus / gesperrt (Richtlinie)
+    # Is the Windows clipboard history (Win+V) usable?  an (on) / aus (off) / gesperrt (blocked by policy)
     try {
         $p = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name AllowClipboardHistory -ErrorAction Stop).AllowClipboardHistory
         if ($p -eq 0) { return 'gesperrt' }
@@ -1423,7 +1423,7 @@ function script:Add-Original([string]$Text, $Namen) {
 }
 
 function script:Write-Protokoll([string]$Zeile) {
-    # Es werden nur Regelnamen protokolliert, nie Inhalte.
+    # Only rule names are logged, never contents.
     try {
         if ((Test-Path -LiteralPath $script:LogPfad) -and (Get-Item -LiteralPath $script:LogPfad).Length -gt 1MB) { Remove-Item -LiteralPath $script:LogPfad -Force }
         Add-Content -LiteralPath $script:LogPfad -Value ("{0:yyyy-MM-dd HH:mm:ss}  {1}" -f (Get-Date), $Zeile) -Encoding UTF8
@@ -1491,12 +1491,12 @@ function script:Invoke-Pruefung {
     if (-not $c -or -not $c.Text) { return }
     $text = $c.Text
 
-    if ($c.Passwortmanager) {            # Passwortmanager-Kopie: nie anfassen (sonst gehen Logins kaputt), aber merken
+    if ($c.Passwortmanager) {            # password manager copy: never touch (logins would break), but remember
         if ($text.Length -le 512 -and $text -notmatch "[\r\n]") { Add-Gemerkt $text }
         return
     }
 
-    # Ein Original, das du bewusst aus Win+V zurueckholst, laesst ClipGuard durch (sonst wuerde es sofort wieder geschwaerzt)
+    # An original you deliberately restore from Win+V is let through by ClipGuard (otherwise it would be redacted again immediately)
     foreach ($o in $script:Originale) {
         if ($o.Text -ceq $text) {
             $b = Get-Besitzer
@@ -1512,8 +1512,8 @@ function script:Invoke-Pruefung {
     if ($r.Anzahl -eq 0) { return }
     $besitzer = Get-Besitzer
 
-    Start-Sleep -Milliseconds 150        # Windows soll das Original noch in den Verlauf (Win+V) uebernehmen
-    if ([ClipGuard.Native]::GetClipboardSequenceNumber() -ne $seq) { return }   # inzwischen etwas anderes kopiert
+    Start-Sleep -Milliseconds 150        # let Windows take the original into the history (Win+V) first
+    if ([ClipGuard.Native]::GetClipboardSequenceNumber() -ne $seq) { return }   # something else was copied in the meantime
 
     if (Set-Zwischenablage $r.Text) {
         Add-Original $text $r.Namen
@@ -1529,11 +1529,11 @@ function script:Invoke-Pruefung {
     }
 }
 
-# ---- Tray-Symbol + Menue ----
+# ---- Tray icon + menu ----
     function script:Test-Autostart { return (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Startup')) "ClipGuard.lnk")) }
 
     function script:New-Symbol([string]$Art) {
-        # Schlankes Outline-Schild (64 px, wird vom System scharf herunterskaliert) + Statuspunkt: gruen = aktiv, gelb = pausiert, rot + violett gefuellt = gerade geschwaerzt
+        # Slim outline shield (64 px, scaled down sharply by the system) + status dot: green = active, yellow = paused, red + violet filled = just redacted
         try {
             $bmp = New-Object System.Drawing.Bitmap 64, 64
             $gfx = [System.Drawing.Graphics]::FromImage($bmp)
@@ -1693,7 +1693,7 @@ function script:Invoke-Pruefung {
             $script:PauseBis = [datetime]::MinValue
             $script:Tray.Icon = $script:IconAn
             $script:Tray.Text = "ClipGuard · aktiv · $($script:Zaehler) geschwärzt"
-            $script:LetzteSeq = [ClipGuard.Native]::GetClipboardSequenceNumber()   # was in der Pause kopiert wurde, bleibt
+            $script:LetzteSeq = [ClipGuard.Native]::GetClipboardSequenceNumber()   # what was copied during the pause stays
         }
         $script:Pausiert = $Pause
         if ($script:MiPause) { $script:MiPause.Checked = $Pause }

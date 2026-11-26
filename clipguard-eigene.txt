@@ -1,12 +1,12 @@
-# Eigene Regeln fuer ClipGuard. Eine Regel pro Zeile, Zeilen mit # werden ignoriert.
-# Nach dem Aendern: Tray-Symbol > "Eigene Regeln neu einlesen".
+# Custom rules for ClipGuard. One rule per line, lines starting with # are ignored.
+# After changing: tray icon > "Eigene Regeln neu einlesen".
 #
-#   literal:Text      schwaerzt genau diesen Text (Gross/Klein egal)
-#   regex:Muster      schwaerzt alles, was auf das .NET-Regex passt
+#   literal:text      redacts exactly this text (case-insensitive)
+#   regex:pattern     redacts everything that matches the .NET regex
 #
-# WICHTIG: Hier KEINE echten Passwoerter eintragen, die Datei ist Klartext.
-# Fuer ein echtes Secret: kopieren, dann Tray-Symbol > "Aktuelle Zwischenablage als Secret merken".
+# IMPORTANT: Do NOT enter real passwords here, the file is plain text.
+# For a real secret: copy it, then tray icon > "Aktuelle Zwischenablage als Secret merken".
 #
-# Beispiele (das # davor entfernen):
+# Examples (remove the # in front):
 # literal:interner-servername.firma.local
 # regex:\bKD-[A-Z]{2}\d{6}\b

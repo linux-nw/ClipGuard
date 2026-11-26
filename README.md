@@ -1,68 +1,81 @@
 # ClipGuard
 
-Schwärzt Secrets in der Windows-Zwischenablage, bevor du sie irgendwo einfügst.
+Redacts secrets in the Windows clipboard before you paste them anywhere. Windows 10/11, Windows PowerShell 5.1.
 
-ClipGuard läuft im Tray, prüft jeden kopierten Text und ersetzt erkannte Secrets durch `[REDACTED]`.
-Egal wohin du danach einfügst (KI-Chat, Forum, Ticket, Teams): das Secret ist schon raus.
-Das Original bleibt im Windows-Zwischenablageverlauf (`Win+V`) und kann bewusst zurückgeholt werden.
+ClipGuard runs in the tray, checks every copied text and replaces detected secrets with `[REDACTED]`.
+No matter where you paste afterwards (AI chat, forum, ticket, Teams): the secret is already gone.
+The original stays in the Windows clipboard history (`Win+V`) and can be restored deliberately.
 
-## Erkennung
+---
 
-1. **Feste Formate**: rund 180 eigene Regeln (Azure/Entra/SharePoint, GitHub, KI-Anbieter, Homeserver-Dienste, Hashes, Schlüsseldateien ...)
-2. **Stichwort + Wert**: `password=...`, `"client_secret": "..."`, `--token ...`, `<Password>...</Password>`, Cookies, Header
-3. **Entropie**: lange Zufallsstrings ohne bekanntes Format
-4. **Gemerkte Secrets**: jedes erkannte Secret (und alles, was ein Passwortmanager kopiert) wird bis zum Beenden im RAM gehalten und danach auch in Variationen geschwärzt: Groß/Klein, URL-kodiert, Base64, Hex, JSON-/XML-/Shell-escaped, umgebrochen, als Bruchstück
-5. **gitleaks-Regeln** (optional): die gepflegten Regeln aus [gitleaks](https://github.com/gitleaks/gitleaks) lassen sich nachladen
+## Detection
 
-Kodierte Inhalte (Base64, Hex, gzip, URL-Encoding, Unicode-Escapes ...) werden vor der Prüfung entpackt.
+1. **Fixed formats**: around 180 own rules (Azure/Entra/SharePoint, GitHub, AI providers, home server services, hashes, key files ...)
+2. **Keyword + value**: `password=...`, `"client_secret": "..."`, `--token ...`, `<Password>...</Password>`, cookies, headers
+3. **Entropy**: long random strings without a known format
+4. **Remembered secrets**: every detected secret (and everything a password manager copies) is kept in RAM until exit and is then also redacted in variations: upper/lower case, URL-encoded, Base64, Hex, JSON/XML/shell-escaped, line-wrapped, as a fragment
+5. **gitleaks rules** (optional): the maintained rules from [gitleaks](https://github.com/gitleaks/gitleaks) can be downloaded
 
-## Voraussetzungen
+Encoded content (Base64, Hex, gzip, URL encoding, Unicode escapes ...) is decoded before checking.
 
-- Windows 10 oder 11
-- Windows PowerShell 5.1 (ist vorinstalliert)
+---
 
-## Benutzung
+## Usage
 
-| Aktion | Befehl |
+Requirements: Windows 10 or 11, Windows PowerShell 5.1 (preinstalled).
+
+| Action | Command |
 | --- | --- |
-| Starten (Tray) | Doppelklick auf `ClipGuard.cmd` |
-| Selbsttest | `ClipGuard.cmd -SelbstTest` |
-| Datei prüfen (zeigt geschwärzte Version) | `ClipGuard.cmd -Pruefe .\datei.txt` |
-| Autostart an / aus | `ClipGuard.cmd -Autostart An` bzw. `-Autostart Aus` |
-| gitleaks-Regeln laden | `ClipGuard.cmd -RegelnAktualisieren` |
+| Start (tray) | Double-click `ClipGuard.cmd` |
+| Self-test | `ClipGuard.cmd -SelbstTest` |
+| Check a file (shows the redacted version) | `ClipGuard.cmd -Pruefe .\datei.txt` |
+| Autostart on / off | `ClipGuard.cmd -Autostart An` or `-Autostart Aus` |
+| Load gitleaks rules | `ClipGuard.cmd -RegelnAktualisieren` |
 
-Alternativ direkt: `powershell -ExecutionPolicy Bypass -File .\clipguard.ps1 <Parameter>`.
+Alternatively run it directly: `powershell -ExecutionPolicy Bypass -File .\clipguard.ps1 <parameters>`.
 
-Im Tray:
+In the tray:
 
-- **Linksklick aufs Schild**: 5 Minuten Pause (graues Schild), erneut klicken schaltet wieder ein
-- **Originale anzeigen**: die letzten 10 Originale (nur im RAM), falls `Win+V` aus oder gesperrt ist
-- **Status-Fenster**: Verlauf, Secret merken, Gemerktes vergessen, Regeln neu laden, gitleaks aktualisieren, Autostart
+- **Left click on the shield**: 5 minute pause (grey shield), click again to switch it back on
+- **Originale anzeigen** (show originals): the last 10 originals (RAM only), in case `Win+V` is off or blocked
+- **Status-Fenster** (status window): history, remember a secret, forget remembered secrets, reload rules, update gitleaks, autostart
 
-## Eigene Regeln
-
-In `clipguard-eigene.txt` (neben dem Skript), eine Regel pro Zeile:
+Own rules go into `clipguard-eigene.txt` (next to the script), one rule per line:
 
 ```
 literal:interner-servername.firma.local
 regex:\bKD-[A-Z]{2}\d{6}\b
 ```
 
-Keine echten Passwörter in diese Datei schreiben, sie ist Klartext. Für ein einzelnes Secret ohne erkennbares Format
-lieber: kopieren, dann im Status-Fenster **Merken**.
+Do not write real passwords into this file, it is plain text. For a single secret without a recognizable format,
+copy it and use **Merken** (remember) in the status window instead.
 
-## Daten
+Limits:
 
-- Protokoll und Einstellungen liegen in `%LOCALAPPDATA%\ClipGuard`
-- Das Protokoll enthält nur Regelnamen, nie Inhalte
-- Gemerkte Secrets und Originale existieren nur im RAM und sind nach dem Beenden weg
+- Images, screenshots and copied files are not checked
+- A single password without a format (e.g. `Sommer2026!`) is not detected on first copy
+- Copies from password managers (Bitwarden, KeePass ...) are never changed, only remembered
 
-## Grenzen
+---
 
-- Bilder, Screenshots und kopierte Dateien werden nicht geprüft
-- Ein einzelnes Passwort ohne Format (z. B. `Sommer2026!`) wird beim ersten Kopieren nicht erkannt
-- Kopien aus Passwortmanagern (Bitwarden, KeePass ...) werden nie verändert, nur gemerkt
+## Repository structure
 
-## Lizenz
+- `clipguard.ps1`: the program (detection engine, command line modes, tray)
+- `ClipGuard.cmd`: launcher
+- `clipguard-eigene.txt`: template for own rules
+- `LICENSE`
 
-[PolyForm Noncommercial 1.0.0](LICENSE). Private und nicht-kommerzielle Nutzung ist erlaubt. Für kommerzielle Nutzung bitte melden.
+---
+
+## Privacy
+
+- Log and settings are in `%LOCALAPPDATA%\ClipGuard`
+- The log contains only rule names, never contents
+- Remembered secrets and originals exist only in RAM and are gone after exit
+- The only network access is the optional gitleaks rules download
+
+---
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE). Private and non-commercial use is allowed. For commercial use, please get in touch.
